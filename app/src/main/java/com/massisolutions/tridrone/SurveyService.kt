@@ -45,6 +45,7 @@ class SurveyService : Service(), LocationListener {
         val folder = File(filesDir, "surveys").apply { mkdirs() }
         val stamp = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'")
             .withZone(ZoneOffset.UTC).format(Instant.now())
+        SurveyConfig.writeSnapshot(this, "gps_$stamp")
         writer = BufferedWriter(FileWriter(File(folder, "gps_$stamp.csv"), true))
         writer?.write(csvHeader)
         writer?.flush()
