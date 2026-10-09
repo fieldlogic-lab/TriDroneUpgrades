@@ -70,7 +70,16 @@ jobs:
           if ! gh release view dev-latest -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create dev-latest -R "$GITHUB_REPOSITORY" --title "TriDrone development updates" --notes "Development builds; install with Android approval." --latest
           fi
-          gh release upload dev-latest "$RUNNER_TEMP/tridrone.apk#tridrone.apk" "$RUNNER_TEMP/latest.json#latest.json" -R "$GITHUB_REPOSITORY" --clobber
+          # GitHub may retain an asset name briefly after --clobber; delete first and retry.
+          gh release delete-asset dev-latest tridrone.apk -R "$GITHUB_REPOSITORY" -y >/dev/null 2>&1 || true
+          gh release delete-asset dev-latest latest.json -R "$GITHUB_REPOSITORY" -y >/dev/null 2>&1 || true
+          for attempt in 1 2 3 4 5; do
+            if gh release upload dev-latest "$RUNNER_TEMP/tridrone.apk#tridrone.apk" "$RUNNER_TEMP/latest.json#latest.json" -R "$GITHUB_REPOSITORY" --clobber; then
+              break
+            fi
+            if [ "$attempt" = 5 ]; then exit 1; fi
+            sleep 5
+          done
           echo "Update feed: https://github.com/$GITHUB_REPOSITORY/releases/download/dev-latest/latest.json"
       - name: Report missing signing configuration
         if: ${{ env.TRIDRONE_KEYSTORE_PATH == '' }}
