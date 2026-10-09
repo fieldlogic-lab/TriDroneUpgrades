@@ -180,10 +180,15 @@ class MainActivity : Activity(), LocationListener {
             "PHONE GPS" -> Color.rgb(40, 89, 149)
             else -> Color.rgb(124, 56, 56)
         })
-        val h = if (fresh) "Unavailable (GGA HDOP is not accuracy)"
+        val gstFresh = fresh && (System.currentTimeMillis() - r.getLong("gst_received_ms", 0L)) in 0..5000
+        val hSigma = if (gstFresh) r.getString("h_sigma_m", null)?.toDoubleOrNull() else null
+        val vSigma = if (gstFresh) r.getString("v_sigma_m", null)?.toDoubleOrNull() else null
+        val h = if (hSigma != null) String.format(Locale.US, "%.3f m • RS2+ GST 1σ", hSigma)
+            else if (fresh) "Unavailable (enable GST output)"
             else if (phone?.hasAccuracy() == true) String.format(Locale.US, "%.1f m • phone estimate", phone.accuracy)
             else "Unavailable"
-        val v = if (fresh) "Unavailable (requires receiver accuracy message)"
+        val v = if (vSigma != null) String.format(Locale.US, "%.3f m • RS2+ GST 1σ", vSigma)
+            else if (fresh) "Unavailable (enable GST output)"
             else if (phone != null && Build.VERSION.SDK_INT >= 26 && phone.hasVerticalAccuracy())
                 String.format(Locale.US, "%.1f m • phone estimate", phone.verticalAccuracyMeters)
             else "Unavailable"
