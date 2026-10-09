@@ -65,7 +65,7 @@ class RtkService : Service() {
                 rawWriter?.write("received_utc_ms,nmea_sentence\n")
                 fixWriter?.write(RtkCoordinateExport.header)
                 rawWriter?.flush(); fixWriter?.flush()
-                prefs.edit().putString("session", session).putInt("sentences", 0).putInt("fixes", 0).apply()
+                prefs.edit().putString("session", session).putInt("sentences", 0).putInt("fixes", 0).remove("last_fix_ms").remove("h_sigma_m").remove("v_sigma_m").apply()
                 report("connected", address)
                 val input = connection.inputStream
                 val line = StringBuilder()
@@ -85,13 +85,15 @@ class RtkService : Service() {
                             rawWriter?.write("$received,${sentence.replace(",", "\\,")}\n")
                             rawWriter?.flush()
                             count++
+                            val gst = NmeaGst.parse(sentence)
+                            if (gst != null) prefs.edit().putString("h_sigma_m", gst.first.toString()).putString("v_sigma_m", gst.second.toString()).putLong("gst_received_ms", received).apply()
                             val fix = NmeaGga.parse(sentence)
                             if (fix != null) {
                                 fixes++
                                 fixWriter?.write(RtkCoordinateExport.row(received, fix, SurveyConfig.load(this)))
                                 fixWriter?.flush()
                                 prefs.edit().putString("quality", fix[3]).putString("satellites", fix[4])
-                                    .putString("lat", fix[1]).putString("lon", fix[2])
+                                    .putString("lat", fix[1]).putString("lon", fix[2]).putString("hdop", fix[5])
                                     .putLong("last_fix_ms", received).apply()
                             }
                             prefs.edit().putInt("sentences", count).putInt("fixes", fixes).apply()
@@ -141,5 +143,17 @@ object NmeaGga {
         }
         return listOf(fields[1], degrees(fields[2], fields[3]), degrees(fields[4], fields[5]),
             fields[6], fields[7], fields[8], fields[9], fields[11], fields[13], fields[14])
+    }
+}
+
+object NmeaGst {
+    fun parse(sentence: String): Pair<Double, Double>? {
+        val fields = sentence.substringBefore('*').removePrefix("$").split(',')
+        if (!fields.firstOrNull().orEmpty().endsWith("GST") || fields.size < 9) return null
+        val lat = fields[6].toDoubleOrNull() ?: return null
+        val lon = fields[7].toDoubleOrNull() ?: return null
+        val vertical = fields[8].toDoubleOrNull() ?: return null
+        if (!lat.isFinite() || !lon.isFinite() || !vertical.isFinite() || lat < 0 || lon < 0 || vertical < 0) return null
+        return Pair(kotlin.math.hypot(lat, lon), vertical)
     }
 }
