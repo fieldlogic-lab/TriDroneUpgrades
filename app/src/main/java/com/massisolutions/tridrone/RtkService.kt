@@ -59,6 +59,7 @@ class RtkService : Service() {
                 connection.connect()
                 val folder = File(filesDir, "surveys").apply { mkdirs() }
                 val session = System.currentTimeMillis().toString()
+                SurveyConfig.writeSnapshot(this, "rtk_$session")
                 rawWriter = BufferedWriter(FileWriter(File(folder, "rtk_nmea_$session.csv")))
                 fixWriter = BufferedWriter(FileWriter(File(folder, "rtk_fixes_$session.csv")))
                 rawWriter?.write("received_utc_ms,nmea_sentence\n")
