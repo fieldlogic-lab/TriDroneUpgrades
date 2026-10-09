@@ -11,7 +11,7 @@ android {
         applicationId = "com.massisolutions.tridrone"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()?.plus(1000) ?: 3
         versionName = "0.3.0"
     }
 
