@@ -13,6 +13,7 @@ import java.util.Date
 import android.graphics.Typeface
 
 class MainActivity : Activity() {
+    private lateinit var rtkStatus: TextView
     private lateinit var status: TextView
     private lateinit var details: TextView
     private lateinit var sessions: TextView
@@ -61,6 +62,12 @@ class MainActivity : Activity() {
         }
         layout.addView(crsSpinner)
         layout.addView(label("VERTICAL DATUM: NAVD88 (EPSG:6360) — elevations pending control", 13f))
+        layout.addView(label("EXTERNAL RTK — REACH RS2+", 15f))
+        rtkStatus = label("RTK: disconnected", 16f)
+        layout.addView(rtkStatus)
+        layout.addView(Button(this).apply { text = "CONNECT PAIRED RS2+ (BLUETOOTH NMEA)"; setOnClickListener { connectRtk() } })
+        layout.addView(Button(this).apply { text = "DISCONNECT RTK"; setOnClickListener { stopService(Intent(this@MainActivity, RtkService::class.java)) } })
+        layout.addView(label("RTK stream saves separate raw NMEA and GGA CSV files. Only quality 4 is RTK FIX; 5 is FLOAT. Emlid Flow configures corrections. No automatic fallback to phone GPS.", 13f))
         layout.addView(label("LIVE ACQUISITION", 14f))
         status.setTypeface(null, Typeface.BOLD)
         layout.addView(status)
@@ -105,8 +112,45 @@ class MainActivity : Activity() {
         handler.removeCallbacks(refresh)
         super.onPause()
     }
+    private fun connectRtk() {
+        if (Build.VERSION.SDK_INT >= 31 &&
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 41)
+            return
+        }
+        try {
+            val manager = getSystemService(BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager
+            val adapter = manager.adapter
+            if (adapter == null || !adapter.isEnabled) {
+                Toast.makeText(this, "Enable Bluetooth and pair Reach RS2+ in Android settings", Toast.LENGTH_LONG).show()
+                return
+            }
+            val devices = adapter.bondedDevices.toList().sortedBy { it.name ?: it.address }
+            if (devices.isEmpty()) {
+                Toast.makeText(this, "No paired Bluetooth devices. Pair the RS2+ first.", Toast.LENGTH_LONG).show()
+                return
+            }
+            val labels = devices.map { (it.name ?: "Unknown") + " (" + it.address + ")" }.toTypedArray()
+            android.app.AlertDialog.Builder(this).setTitle("Select paired RTK receiver")
+                .setItems(labels) { _, i ->
+                    val intent = Intent(this, RtkService::class.java).putExtra("address", devices[i].address)
+                    try { startForegroundService(intent) }
+                    catch (e: Exception) { Toast.makeText(this, "RTK start failed: " + e.message, Toast.LENGTH_LONG).show() }
+                }.setNegativeButton("Cancel", null).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Bluetooth error: " + e.message, Toast.LENGTH_LONG).show()
+        }
+    }
     private fun latest(): File? = File(filesDir, "surveys").listFiles { f -> f.isFile && f.extension == "csv" }?.maxByOrNull { it.lastModified() }
     private fun updateDisplay() {
+        val rp = getSharedPreferences("rtk_status", MODE_PRIVATE)
+        val age = (System.currentTimeMillis() - rp.getLong("last_fix_ms", 0L)) / 1000
+        val quality = rp.getString("quality", "?") ?: "?"
+        val fixLabel = when(quality) { "4" -> "RTK FIX"; "5" -> "RTK FLOAT"; "2" -> "DGPS"; "1" -> "SINGLE"; "0" -> "INVALID"; else -> "UNKNOWN" }
+        rtkStatus.text = "RTK: " + rp.getString("state", "disconnected") + " • " + rp.getString("detail", "") +
+            "\\nFix: " + fixLabel + " • Satellites: " + rp.getString("satellites", "—") +
+            " • NMEA: " + rp.getInt("sentences", 0) + " • GGA: " + rp.getInt("fixes", 0) +
+            (if (rp.getLong("last_fix_ms", 0L) > 0) " • Last GGA: " + age + "s ago" else "")
         val p = getSharedPreferences("logger_status", MODE_PRIVATE)
         val state = p.getString("state", "idle") ?: "idle"
         val count = p.getInt("points", 0)
@@ -272,6 +316,7 @@ class MainActivity : Activity() {
     }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, results: IntArray) {
         super.onRequestPermissionsResult(code, permissions, results)
+        if (code == 41 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) connectRtk()
         if (code == requestCode) {
             if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) startSurvey()
             else status.text = "Precise location permission required"
