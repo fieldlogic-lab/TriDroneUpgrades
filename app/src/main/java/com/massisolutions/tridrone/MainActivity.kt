@@ -17,6 +17,10 @@ import android.location.LocationListener
 import android.location.LocationManager
 
 class MainActivity : Activity(), LocationListener {
+    private lateinit var setupStatus: TextView
+    private lateinit var setupNext: Button
+    private lateinit var setupSounder: LinearLayout
+    private lateinit var legacyPanel: LinearLayout
     private lateinit var readiness: TextView
     private lateinit var sounderStatus: TextView
     private lateinit var gpsBar: TextView
@@ -137,8 +141,62 @@ class MainActivity : Activity(), LocationListener {
 
 
         layout.addView(label("EPSG:6539 export is provisional pending datum and control verification. Phone GPS is not survey-grade.", 13f))
-        root.addView(layout)
-        layout.addView(Button(this).apply { text = "CHECK FOR APP UPDATES"; setOnClickListener { AppUpdater.open(this@MainActivity) } })
+        val wizard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 36, 32, 30)
+        }
+        fun heading(value: String, size: Float) = TextView(this).apply {
+            text = value; textSize = size; setPadding(0, 12, 0, 12)
+        }
+        wizard.addView(heading("TRIDRONE  |  FIELD SETUP", 23f).apply { setTypeface(null, Typeface.BOLD) })
+        wizard.addView(heading("1  CONNECT GPS STREAM", 19f))
+        setupStatus = heading("Waiting for receiver", 16f)
+        wizard.addView(setupStatus)
+        wizard.addView(Button(this).apply {
+            text = "CONNECT EMLID OVER WI-FI"
+            setOnClickListener { showWifiRtkSetup() }
+        })
+        wizard.addView(Button(this).apply {
+            text = "BLUETOOTH GPS (BACKUP)"
+            setOnClickListener { connectRtk() }
+        })
+        setupSounder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        setupSounder.addView(heading("2  CONNECT SOUNDING STREAM", 19f))
+        setupSounder.addView(heading("HydroLite Plus — protocol integration pending. No simulated depths.", 15f))
+        setupSounder.addView(Button(this).apply {
+            text = "CONNECT HYDROLITE PLUS"
+            setOnClickListener {
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Sounder integration")
+                    .setMessage("The HydroLite Bluetooth transport and depth messages must be verified before this control can connect. GNSS can be tested now.")
+                    .setPositiveButton("OK", null).show()
+            }
+        })
+        wizard.addView(setupSounder)
+        wizard.addView(heading("3  CONTINUOUS HYDROGRAPHIC COLLECTION", 19f))
+        setupNext = Button(this).apply {
+            text = "START RECORDING — WAITING FOR VALID STREAMS"
+            isEnabled = false
+        }
+        wizard.addView(setupNext)
+        wizard.addView(heading("Sounder-driven, timestamped continuous recording will unlock only after both streams and offsets are validated.", 14f))
+        wizard.addView(Button(this).apply {
+            text = "CHECK FOR APP UPDATES"
+            setOnClickListener { AppUpdater.open(this@MainActivity) }
+        })
+        wizard.addView(Button(this).apply {
+            text = "DIAGNOSTICS / PHONE GPS TEST LOGGER"
+            setOnClickListener {
+                legacyPanel.visibility = if (legacyPanel.visibility == android.view.View.VISIBLE)
+                    android.view.View.GONE else android.view.View.VISIBLE
+            }
+        })
+        legacyPanel = layout
+        legacyPanel.visibility = android.view.View.GONE
+        val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        screen.addView(wizard)
+        screen.addView(legacyPanel)
+        root.addView(screen)
         setContentView(root)
     }
     override fun onResume() {
@@ -239,6 +297,44 @@ class MainActivity : Activity(), LocationListener {
                 Toast.makeText(this, "Settings saved; new sessions capture metadata", Toast.LENGTH_LONG).show()
             }.show()
     }
+    private fun showWifiRtkSetup() {
+        val prefs = getSharedPreferences("wifi_rtk_settings", MODE_PRIVATE)
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(28, 12, 28, 12)
+        }
+        form.addView(TextView(this).apply {
+            text = "Connect the Reach to the phone hotspot and configure a TCP NMEA server on the receiver. Enter its hotspot IP and NMEA TCP port."
+        })
+        val host = EditText(this).apply {
+            setSingleLine(); hint = "Receiver IP address"
+            setText(prefs.getString("host", ""))
+        }
+        val port = EditText(this).apply {
+            setSingleLine(); hint = "NMEA TCP port"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setText(prefs.getInt("port", 0).takeIf { it > 0 }?.toString() ?: "")
+        }
+        form.addView(host); form.addView(port)
+        android.app.AlertDialog.Builder(this).setTitle("Emlid Wi-Fi NMEA")
+            .setView(form)
+            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Disconnect") { _, _ ->
+                stopService(Intent(this, WifiRtkService::class.java))
+            }
+            .setPositiveButton("Connect") { _, _ ->
+                val h = host.text.toString().trim()
+                val p = port.text.toString().toIntOrNull()
+                if (h.isBlank() || p == null || p !in 1..65535) {
+                    Toast.makeText(this, "Enter a receiver IP and TCP port", Toast.LENGTH_LONG).show()
+                } else {
+                    prefs.edit().putString("host", h).putInt("port", p).apply()
+                    stopService(Intent(this, RtkService::class.java))
+                    startForegroundService(Intent(this, WifiRtkService::class.java)
+                        .putExtra("host", h).putExtra("port", p))
+                }
+            }.show()
+    }
     private fun connectRtk() {
         if (Build.VERSION.SDK_INT >= 31 &&
             checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
@@ -271,6 +367,19 @@ class MainActivity : Activity(), LocationListener {
     private fun latest(): File? = File(filesDir, "surveys").listFiles { f -> f.isFile && f.extension == "csv" }?.maxByOrNull { it.lastModified() }
     private fun updateDisplay() {
         updateGnssPreview()
+        val gnss = getSharedPreferences("rtk_status", MODE_PRIVATE)
+        val fixAge = System.currentTimeMillis() - gnss.getLong("last_fix_ms", 0L)
+        val live = gnss.getString("state", "") == "connected" && fixAge in 0..5000
+        val fixType = when (gnss.getString("quality", "")) {
+            "4" -> "RTK FIX"
+            "5" -> "RTK FLOAT"
+            else -> "NO RTK FIX"
+        }
+        setupStatus.text = "GNSS: " + (gnss.getString("state", "disconnected") ?: "disconnected") +
+            (if (live) "  •  $fixType" else "  •  awaiting live GGA") +
+            "\\n" + (gnss.getString("detail", "") ?: "") +
+            "\\nGGA: " + gnss.getInt("fixes", 0)
+        setupSounder.alpha = if (live) 1f else 0.65f
         val rt = getSharedPreferences("rtk_status", MODE_PRIVATE)
         val rtAge = System.currentTimeMillis() - rt.getLong("last_fix_ms", 0L)
         val fixed = rt.getString("state", "") == "connected" && rt.getString("quality", "") == "4" && rtAge in 0..5000
