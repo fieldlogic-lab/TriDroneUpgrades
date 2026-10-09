@@ -18,6 +18,7 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <service android:name=".WifiRtkService" android:exported="false" android:foregroundServiceType="connectedDevice"/>
         <service android:name=".RtkService" android:exported="false" android:foregroundServiceType="connectedDevice"/>
         <service android:name=".SurveyService" android:exported="false" android:foregroundServiceType="location"/>
         <provider android:name="androidx.core.content.FileProvider"
