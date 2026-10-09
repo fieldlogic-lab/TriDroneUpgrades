@@ -83,7 +83,6 @@ class MainActivity : Activity(), LocationListener {
         details = label("Waiting for GPS observations", 17f)
         sessions = label("No sessions yet", 15f)
         layout.addView(Button(this).apply { text = "SURVEY SETTINGS / COORDINATE SYSTEMS"; setOnClickListener { showSurveySettings() } })
-        layout.addView(Button(this).apply { text = "CHECK FOR APP UPDATES"; setOnClickListener { AppUpdater.open(this@MainActivity) } })
         layout.addView(label("HORIZONTAL COORDINATE SYSTEM (CONFIGURATION)", 15f).apply { visibility = android.view.View.GONE })
         crsSpinner = Spinner(this)
         crsSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, crsLabels)
@@ -139,6 +138,7 @@ class MainActivity : Activity(), LocationListener {
 
         layout.addView(label("EPSG:6539 export is provisional pending datum and control verification. Phone GPS is not survey-grade.", 13f))
         root.addView(layout)
+        layout.addView(Button(this).apply { text = "CHECK FOR APP UPDATES"; setOnClickListener { AppUpdater.open(this@MainActivity) } })
         setContentView(root)
     }
     override fun onResume() {
