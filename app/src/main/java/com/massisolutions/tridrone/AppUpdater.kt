@@ -21,18 +21,19 @@ import java.security.MessageDigest
 object AppUpdater {
     private const val PREFS = "tridrone_updates"
     private const val KEY = "feed_url"
+    private const val DEFAULT_FEED = "https://github.com/fieldlogic-lab/TriDroneUpgrades/releases/download/dev-latest/latest.json"
 
     fun open(activity: Activity) {
         val prefs = activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE)
-        val current = prefs.getString(KEY, "") ?: ""
+        val current = prefs.getString(KEY, DEFAULT_FEED) ?: DEFAULT_FEED
         val input = EditText(activity).apply {
             setSingleLine()
-            hint = "https://your-server.example/tridrone/latest.json"
+            hint = DEFAULT_FEED
             setText(current)
             setPadding(24, 22, 24, 22)
         }
         AlertDialog.Builder(activity).setTitle("TriDrone app updates")
-            .setMessage("Enter your HTTPS update manifest address once. The feed must publish a versionCode, apkUrl and sha256. Your private GitHub Actions artifact URL cannot be used directly.")
+            .setMessage("The official development update feed is preconfigured. Tap Check now to download the newest signed build.")
             .setView(input)
             .setNegativeButton("Cancel", null)
             .setNeutralButton("Save") { _, _ ->
