@@ -55,7 +55,11 @@ class RtkService : Service() {
                 val device = adapter.getRemoteDevice(address)
                 val connection = device.createRfcommSocketToServiceRecord(spp)
                 socket = connection
-                adapter.cancelDiscovery()
+                // Paired RFCOMM connection does not require discovery.
+                if (Build.VERSION.SDK_INT < 31 ||
+                    checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+                    try { adapter.cancelDiscovery() } catch (_: SecurityException) {}
+                }
                 connection.connect()
                 val folder = File(filesDir, "surveys").apply { mkdirs() }
                 val session = System.currentTimeMillis().toString()
