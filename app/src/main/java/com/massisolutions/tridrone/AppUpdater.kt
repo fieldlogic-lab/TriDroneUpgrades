@@ -59,14 +59,35 @@ object AppUpdater {
         u.protocol.equals("https", true) && !u.host.isNullOrBlank() && u.userInfo == null
     } catch (_: Exception) { false }
 
+    /** Follow GitHub Release 302 redirects without permitting HTTPS downgrade or loops. */
+    private fun openHttps(url: String): HttpURLConnection {
+        var current = URL(url)
+        require(validHttps(current.toString())) { "HTTPS URL required" }
+        repeat(8) {
+            val connection = current.openConnection() as HttpURLConnection
+            connection.connectTimeout = 15000
+            connection.readTimeout = 30000
+            connection.instanceFollowRedirects = false
+            val code = connection.responseCode
+            if (code in listOf(301, 302, 303, 307, 308)) {
+                val location = connection.getHeaderField("Location")
+                connection.disconnect()
+                require(!location.isNullOrBlank()) { "Redirect missing Location" }
+                val next = URL(current, location)
+                require(validHttps(next.toString())) { "Unsafe update redirect" }
+                current = next
+            } else {
+                return connection
+            }
+        }
+        error("Too many update redirects")
+    }
+
     private fun check(activity: Activity, feed: String) {
         Toast.makeText(activity, "Checking for updates…", Toast.LENGTH_SHORT).show()
         Thread {
             try {
-                val connection = URL(feed).openConnection() as HttpURLConnection
-                connection.connectTimeout = 12000
-                connection.readTimeout = 12000
-                connection.instanceFollowRedirects = false
+                val connection = openHttps(feed)
                 val json = try {
                     if (connection.responseCode != 200) error("Update feed HTTP ${connection.responseCode}")
                     JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
@@ -99,10 +120,7 @@ object AppUpdater {
         Toast.makeText(activity, "Downloading update…", Toast.LENGTH_SHORT).show()
         Thread {
             try {
-                val c = URL(apkUrl).openConnection() as HttpURLConnection
-                c.connectTimeout = 15000
-                c.readTimeout = 30000
-                c.instanceFollowRedirects = false
+                val c = openHttps(apkUrl)
                 val file = File(activity.cacheDir, "tridrone-update.apk")
                 val digest = MessageDigest.getInstance("SHA-256")
                 try {
