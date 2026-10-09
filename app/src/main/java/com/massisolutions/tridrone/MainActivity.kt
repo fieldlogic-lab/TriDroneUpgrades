@@ -59,6 +59,7 @@ class MainActivity : Activity(), LocationListener {
         gpsMetrics = label("Horizontal: —\nVertical: —", 17f)
         layout.addView(gpsBar)
         layout.addView(gpsMetrics)
+        layout.addView(Button(this).apply { text = "CONNECT REACH RS2+ GNSS"; setOnClickListener { connectRtk() } })
         locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
         layout.addView(label("SOUNDER / HYDROLITE PLUS", 15f).apply { setTypeface(null, Typeface.BOLD) })
         sounderStatus = label("Disconnected • Depth unavailable", 17f)
@@ -102,7 +103,6 @@ class MainActivity : Activity(), LocationListener {
         layout.addView(label("EXTERNAL RTK — REACH RS2+", 15f))
         rtkStatus = label("RTK: disconnected", 16f)
         layout.addView(rtkStatus)
-        layout.addView(Button(this).apply { text = "CONNECT EMLID RS2+ (NMEA)"; setOnClickListener { connectRtk() } })
         layout.addView(Button(this).apply { text = "DISCONNECT RTK"; setOnClickListener { stopService(Intent(this@MainActivity, RtkService::class.java)) } })
 
         layout.addView(label("PHONE GPS LOGGER (NOT RTK)", 14f))
@@ -167,19 +167,16 @@ class MainActivity : Activity(), LocationListener {
         val age = System.currentTimeMillis() - r.getLong("last_fix_ms", 0L)
         val fresh = r.getString("state", "") == "connected" && age in 0..5000
         val quality = if (fresh) r.getString("quality", "") else ""
-        val phone = previewFix?.takeIf { System.currentTimeMillis() - it.time in 0..10000 }
         val state = when {
             quality == "4" -> "RTK FIX"
             quality == "5" -> "RTK FLOAT"
             fresh -> "RS2+ • NOT FIXED"
-            phone != null -> "PHONE GPS"
-            else -> "NO LIVE FIX"
+            else -> "NOT CONNECTED"
         }
-        gpsBar.text = "●  GNSS STATUS  •  $state"
+        gpsBar.text = "●  REACH RS2+  •  $state"
         gpsBar.setBackgroundColor(when (state) {
             "RTK FIX" -> Color.rgb(21, 119, 78)
             "RTK FLOAT" -> Color.rgb(172, 109, 19)
-            "PHONE GPS" -> Color.rgb(40, 89, 149)
             else -> Color.rgb(124, 56, 56)
         })
         val gstFresh = fresh && (System.currentTimeMillis() - r.getLong("gst_received_ms", 0L)) in 0..5000
@@ -187,14 +184,11 @@ class MainActivity : Activity(), LocationListener {
         val vSigma = if (gstFresh) r.getString("v_sigma_m", null)?.toDoubleOrNull() else null
         val h = if (hSigma != null) String.format(Locale.US, "%.3f m • RS2+ GST 1σ", hSigma)
             else if (fresh) "Unavailable (enable GST output)"
-            else if (phone?.hasAccuracy() == true) String.format(Locale.US, "%.1f m • phone estimate", phone.accuracy)
             else "Unavailable"
         val v = if (vSigma != null) String.format(Locale.US, "%.3f m • RS2+ GST 1σ", vSigma)
             else if (fresh) "Unavailable (enable GST output)"
-            else if (phone != null && Build.VERSION.SDK_INT >= 26 && phone.hasVerticalAccuracy())
-                String.format(Locale.US, "%.1f m • phone estimate", phone.verticalAccuracyMeters)
             else "Unavailable"
-        gpsMetrics.text = "Horizontal accuracy: $h\\nVertical accuracy: $v\\n" +
+        gpsMetrics.text = "Receiver horizontal precision: $h\nReceiver vertical precision: $v\n" +
             (if (fresh) "RS2+ satellites: " + r.getString("satellites", "—") + " • HDOP: " + r.getString("hdop", "—") else "Awaiting external RTK")
     }
     private fun showSurveySettings() {
