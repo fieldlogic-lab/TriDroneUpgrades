@@ -17,6 +17,8 @@ import android.location.LocationListener
 import android.location.LocationManager
 
 class MainActivity : Activity(), LocationListener {
+    private lateinit var readiness: TextView
+    private lateinit var sounderStatus: TextView
     private lateinit var gpsBar: TextView
     private lateinit var gpsMetrics: TextView
     private lateinit var locationManager: LocationManager
@@ -58,6 +60,25 @@ class MainActivity : Activity(), LocationListener {
         layout.addView(gpsBar)
         layout.addView(gpsMetrics)
         locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
+        layout.addView(label("SOUNDER / HYDROLITE PLUS", 15f).apply { setTypeface(null, Typeface.BOLD) })
+        sounderStatus = label("Disconnected • Depth unavailable", 17f)
+        layout.addView(sounderStatus)
+        layout.addView(Button(this).apply {
+            text = "SOUNDER CONNECTION"
+            setOnClickListener {
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("HydroLite Plus")
+                    .setMessage("Sounder transport and message protocol require hardware verification. No live depth connection is implemented yet.")
+                    .setPositiveButton("OK", null).show()
+            }
+        })
+        readiness = label("SURVEY READINESS • NOT READY", 17f).apply { setTypeface(null, Typeface.BOLD) }
+        layout.addView(readiness)
+        layout.addView(Button(this).apply {
+            text = "CAPTURE GNSS + DEPTH OBSERVATION"
+            isEnabled = false
+        })
+        layout.addView(label("Capture is unavailable until RTK, sensor offsets, sounder depth and epoch synchronization are validated.", 13f))
         status = label("Checking logger status...", 19f)
         details = label("Waiting for GPS observations", 17f)
         sessions = label("No sessions yet", 15f)
@@ -114,7 +135,7 @@ class MainActivity : Activity(), LocationListener {
         layout.addView(Button(this).apply { text = "VIEW SAVED SURVEYS AND POINTS"; setOnClickListener { showSavedSurveys() } })
         layout.addView(label("Recent session", 18f))
         layout.addView(sessions)
-        layout.addView(label("EPSG:6539 projection is not implemented. Selection is a display preference only; CSV currently stores raw latitude/longitude. Phone GNSS is not survey-grade.", 13f))
+        layout.addView(label("EPSG:6539 export is provisional pending datum and control verification. Phone GPS is not survey-grade.", 13f))
         root.addView(layout)
         setContentView(root)
     }
@@ -249,6 +270,15 @@ class MainActivity : Activity(), LocationListener {
     private fun latest(): File? = File(filesDir, "surveys").listFiles { f -> f.isFile && f.extension == "csv" }?.maxByOrNull { it.lastModified() }
     private fun updateDisplay() {
         updateGnssPreview()
+        val rt = getSharedPreferences("rtk_status", MODE_PRIVATE)
+        val age = System.currentTimeMillis() - rt.getLong("last_fix_ms", 0L)
+        val fixed = rt.getString("state", "") == "connected" && rt.getString("quality", "") == "4" && age in 0..5000
+        readiness.text = "SURVEY READINESS • NOT READY\n" +
+            (if (fixed) "RTK FIX live" else "RTK FIX required") +
+            "\nSensor offsets not configured" +
+            "\nHydroLite depth unavailable" +
+            "\nSynchronized capture not implemented"
+        sounderStatus.text = "Disconnected • Depth unavailable"
         val rp = getSharedPreferences("rtk_status", MODE_PRIVATE)
         val rtkAge = (System.currentTimeMillis() - rp.getLong("last_fix_ms", 0L)) / 1000
         val quality = rp.getString("quality", "?") ?: "?"
