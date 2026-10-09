@@ -271,8 +271,8 @@ class MainActivity : Activity(), LocationListener {
     private fun updateDisplay() {
         updateGnssPreview()
         val rt = getSharedPreferences("rtk_status", MODE_PRIVATE)
-        val age = System.currentTimeMillis() - rt.getLong("last_fix_ms", 0L)
-        val fixed = rt.getString("state", "") == "connected" && rt.getString("quality", "") == "4" && age in 0..5000
+        val rtAge = System.currentTimeMillis() - rt.getLong("last_fix_ms", 0L)
+        val fixed = rt.getString("state", "") == "connected" && rt.getString("quality", "") == "4" && rtAge in 0..5000
         readiness.text = "SURVEY READINESS • NOT READY\n" +
             (if (fixed) "RTK FIX live" else "RTK FIX required") +
             "\nSensor offsets not configured" +
