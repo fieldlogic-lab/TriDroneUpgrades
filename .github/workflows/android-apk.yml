@@ -53,3 +53,43 @@ jobs:
           name: TriDrone-Logger-v0.1-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Publish signed APK to public distribution repository
+        if: ${{ env.TRIDRONE_KEYSTORE_PATH != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.TRIDRONE_DISTRIBUTION_TOKEN }}
+          DISTRIBUTION_REPO: ${{ vars.TRIDRONE_DISTRIBUTION_REPO }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ] || [ -z "$DISTRIBUTION_REPO" ]; then
+            echo "::warning::Distribution not configured; set TRIDRONE_DISTRIBUTION_TOKEN and TRIDRONE_DISTRIBUTION_REPO."
+            exit 0
+          fi
+          if ! [[ "$DISTRIBUTION_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::Invalid distribution repository."
+            exit 1
+          fi
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          SHA=$(sha256sum "$APK" | cut -d' ' -f1)
+          VERSION=$((1000 + GITHUB_RUN_NUMBER))
+          gh repo view "$DISTRIBUTION_REPO" --json isPrivate --jq '.isPrivate' | grep -qx false || {
+            echo "::error::Distribution repository must be public for token-free app downloads."
+            exit 1
+          }
+          if ! gh release view dev-latest -R "$DISTRIBUTION_REPO" >/dev/null 2>&1; then
+            gh release create dev-latest -R "$DISTRIBUTION_REPO" --title "TriDrone development updates" --notes "Development builds; Android installer confirmation required." --latest
+          fi
+          cp "$APK" "$RUNNER_TEMP/tridrone.apk"
+          gh release upload dev-latest "$RUNNER_TEMP/tridrone.apk#tridrone.apk" -R "$DISTRIBUTION_REPO" --clobber
+          APK_URL="https://github.com/$DISTRIBUTION_REPO/releases/download/dev-latest/tridrone.apk"
+          MANIFEST=$(jq -nc --argjson versionCode "$VERSION" --arg apkUrl "$APK_URL" --arg sha256 "$SHA" '{versionCode:$versionCode,apkUrl:$apkUrl,sha256:$sha256}')
+          CONTENT=$(printf '%s\n' "$MANIFEST" | base64 -w0)
+          SHA_OLD=$(gh api "repos/$DISTRIBUTION_REPO/contents/latest.json" --jq '.sha' 2>/dev/null || true)
+          if [ -n "$SHA_OLD" ]; then
+            jq -nc --arg message "Update TriDrone development manifest to $VERSION" --arg content "$CONTENT" --arg sha "$SHA_OLD" '{message:$message,content:$content,sha:$sha}' > "$RUNNER_TEMP/manifest-request.json"
+          else
+            jq -nc --arg message "Publish TriDrone development manifest $VERSION" --arg content "$CONTENT" '{message:$message,content:$content}' > "$RUNNER_TEMP/manifest-request.json"
+          fi
+          gh api -X PUT "repos/$DISTRIBUTION_REPO/contents/latest.json" --input "$RUNNER_TEMP/manifest-request.json" >/dev/null
+          echo "Feed: https://raw.githubusercontent.com/$DISTRIBUTION_REPO/main/latest.json"
