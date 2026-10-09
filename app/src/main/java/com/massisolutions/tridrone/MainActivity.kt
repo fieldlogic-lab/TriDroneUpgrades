@@ -53,7 +53,7 @@ class MainActivity : Activity(), LocationListener {
             textSize = size
             setPadding(0, 10, 0, 10)
         }
-        layout.addView(label("TRIDRONE  |  SURVEY DASHBOARD", 23f).apply { setTypeface(null, Typeface.BOLD) })
+        layout.addView(label("TRIDRONE  |  HYDROGRAPHIC SURVEY", 23f).apply { setTypeface(null, Typeface.BOLD) })
         layout.addView(label("GNSS acquisition  •  Offline  •  Field mode", 14f))
         gpsBar = label("GNSS STATUS • SEARCHING", 19f).apply { setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE); setBackgroundColor(Color.DKGRAY); setPadding(20,20,20,20) }
         gpsMetrics = label("Horizontal: —\nVertical: —", 17f)
@@ -83,7 +83,7 @@ class MainActivity : Activity(), LocationListener {
         details = label("Waiting for GPS observations", 17f)
         sessions = label("No sessions yet", 15f)
         layout.addView(Button(this).apply { text = "SURVEY SETTINGS / COORDINATE SYSTEMS"; setOnClickListener { showSurveySettings() } })
-        layout.addView(label("HORIZONTAL COORDINATE SYSTEM (CONFIGURATION)", 15f))
+        layout.addView(label("HORIZONTAL COORDINATE SYSTEM (CONFIGURATION)", 15f)).also { it.visibility = android.view.View.GONE }
         crsSpinner = Spinner(this)
         crsSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, crsLabels)
         val settings = getSharedPreferences("survey_settings", MODE_PRIVATE)
@@ -96,15 +96,15 @@ class MainActivity : Activity(), LocationListener {
                 updateDisplay()
             }
         }
-        layout.addView(crsSpinner)
-        layout.addView(label("VERTICAL DATUM: NAVD88 (EPSG:6360) — elevations pending control", 13f))
+        layout.addView(crsSpinner).also { it.visibility = android.view.View.GONE }
+
         layout.addView(label("EXTERNAL RTK — REACH RS2+", 15f))
         rtkStatus = label("RTK: disconnected", 16f)
         layout.addView(rtkStatus)
-        layout.addView(Button(this).apply { text = "CONNECT PAIRED RS2+ (BLUETOOTH NMEA)"; setOnClickListener { connectRtk() } })
+        layout.addView(Button(this).apply { text = "CONNECT EMLID RS2+ (NMEA)"; setOnClickListener { connectRtk() } })
         layout.addView(Button(this).apply { text = "DISCONNECT RTK"; setOnClickListener { stopService(Intent(this@MainActivity, RtkService::class.java)) } })
-        layout.addView(label("RTK stream saves separate raw NMEA and GGA CSV files. Only quality 4 is RTK FIX; 5 is FLOAT. Emlid Flow configures corrections. No automatic fallback to phone GPS.", 13f))
-        layout.addView(label("LIVE ACQUISITION", 14f))
+
+        layout.addView(label("PHONE GPS LOGGER (NOT RTK)", 14f))
         status.setTypeface(null, Typeface.BOLD)
         layout.addView(status)
         timing = label("Survey not started", 17f)
@@ -113,14 +113,14 @@ class MainActivity : Activity(), LocationListener {
         layout.addView(precision)
         lastFix = label("Last fix: none", 14f)
         layout.addView(lastFix)
-        layout.addView(label("LIVE POSITION", 14f))
+
         layout.addView(details)
         layout.addView(Button(this).apply {
-            text = "START RECORDING"
+            text = "START PHONE GPS TEST LOG (NOT RTK)"
             setOnClickListener { startSurvey() }
         })
         layout.addView(Button(this).apply {
-            text = "STOP RECORDING"
+            text = "STOP PHONE GPS TEST LOG"
             setOnClickListener {
                 stopService(Intent(this@MainActivity, SurveyService::class.java))
                 status.text = "Stop requested"
@@ -133,8 +133,8 @@ class MainActivity : Activity(), LocationListener {
         })
         layout.addView(Button(this).apply { text = "OPEN SURVEY MAP"; setOnClickListener { showSurveyMap() } })
         layout.addView(Button(this).apply { text = "VIEW SAVED SURVEYS AND POINTS"; setOnClickListener { showSavedSurveys() } })
-        layout.addView(label("Recent session", 18f))
-        layout.addView(sessions)
+
+
         layout.addView(label("EPSG:6539 export is provisional pending datum and control verification. Phone GPS is not survey-grade.", 13f))
         root.addView(layout)
         setContentView(root)
