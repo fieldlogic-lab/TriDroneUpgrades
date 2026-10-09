@@ -83,7 +83,7 @@ class MainActivity : Activity(), LocationListener {
         details = label("Waiting for GPS observations", 17f)
         sessions = label("No sessions yet", 15f)
         layout.addView(Button(this).apply { text = "SURVEY SETTINGS / COORDINATE SYSTEMS"; setOnClickListener { showSurveySettings() } })
-        layout.addView(label("HORIZONTAL COORDINATE SYSTEM (CONFIGURATION)", 15f)).also { it.visibility = android.view.View.GONE }
+        layout.addView(label("HORIZONTAL COORDINATE SYSTEM (CONFIGURATION)", 15f).apply { visibility = android.view.View.GONE })
         crsSpinner = Spinner(this)
         crsSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, crsLabels)
         val settings = getSharedPreferences("survey_settings", MODE_PRIVATE)
@@ -96,7 +96,8 @@ class MainActivity : Activity(), LocationListener {
                 updateDisplay()
             }
         }
-        layout.addView(crsSpinner).also { it.visibility = android.view.View.GONE }
+        crsSpinner.visibility = android.view.View.GONE
+        layout.addView(crsSpinner)
 
         layout.addView(label("EXTERNAL RTK — REACH RS2+", 15f))
         rtkStatus = label("RTK: disconnected", 16f)
