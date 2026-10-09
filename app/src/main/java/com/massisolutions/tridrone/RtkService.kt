@@ -161,3 +161,109 @@ object NmeaGst {
         return Pair(kotlin.math.hypot(lat, lon), vertical)
     }
 }
+
+/**
+ * Wi-Fi NMEA TCP client for Reach receivers configured to expose a TCP server.
+ * The host/port are operator configured; no assumption about Emlid network mode.
+ * Never marks an RTK fix until a fresh, valid GGA sentence arrives.
+ */
+class WifiRtkService : Service() {
+    private val running = AtomicBoolean(false)
+    private var worker: Thread? = null
+    @Volatile private var tcp: java.net.Socket? = null
+    private val prefs by lazy { getSharedPreferences("rtk_status", MODE_PRIVATE) }
+    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onCreate() {
+        super.onCreate()
+        val notifications = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        notifications.createNotificationChannel(NotificationChannel("tridrone_wifi_rtk", "Wi-Fi GNSS streaming", NotificationManager.IMPORTANCE_LOW))
+        startForeground(1003, Notification.Builder(this, "tridrone_wifi_rtk")
+            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setContentTitle("TriDrone Wi-Fi GNSS")
+            .setContentText("Receiving RTK NMEA over TCP")
+            .setOngoing(true).build())
+    }
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == "STOP") { stopSelf(); return START_NOT_STICKY }
+        if (running.getAndSet(true)) return START_NOT_STICKY
+        val host = intent?.getStringExtra("host").orEmpty()
+        val port = intent?.getIntExtra("port", 0) ?: 0
+        if (host.isBlank() || port !in 1..65535) {
+            prefs.edit().putString("state", "error").putString("detail", "Configure receiver IP and TCP port").apply()
+            running.set(false); stopSelf(); return START_NOT_STICKY
+        }
+        worker = Thread {
+            val folder = File(filesDir, "surveys").apply { mkdirs() }
+            val session = System.currentTimeMillis().toString()
+            var count = 0
+            var fixes = 0
+            try {
+                SurveyConfig.writeSnapshot(this, "wifi_rtk_$session")
+                BufferedWriter(FileWriter(File(folder, "wifi_nmea_$session.csv"))).use { raw ->
+                    BufferedWriter(FileWriter(File(folder, "wifi_fixes_$session.csv"))).use { output ->
+                        raw.write("received_utc_ms,nmea_sentence\\n")
+                        output.write(RtkCoordinateExport.header)
+                        while (running.get()) {
+                            try {
+                                prefs.edit().putString("state", "connecting")
+                                    .putString("detail", "$host:$port")
+                                    .remove("last_fix_ms").apply()
+                                val socket = java.net.Socket()
+                                tcp = socket
+                                socket.connect(java.net.InetSocketAddress(host, port), 7000)
+                                socket.soTimeout = 12000
+                                prefs.edit().putString("state", "connected").putString("detail", "Wi-Fi TCP $host:$port")
+                                    .putString("transport", "wifi").putString("session", session)
+                                    .remove("last_fix_ms").apply()
+                                socket.getInputStream().bufferedReader().use { reader ->
+                                    while (running.get()) {
+                                        val sentence = reader.readLine() ?: throw java.io.EOFException("NMEA stream closed")
+                                        if (sentence.length > 256 || !sentence.startsWith("$") || !NmeaGga.valid(sentence)) continue
+                                        val received = System.currentTimeMillis()
+                                        raw.write("$received,${sentence.replace(",", "\\,")}\\n")
+                                        raw.flush()
+                                        count++
+                                        NmeaGst.parse(sentence)?.let { gst ->
+                                            prefs.edit().putString("h_sigma_m", gst.first.toString())
+                                                .putString("v_sigma_m", gst.second.toString())
+                                                .putLong("gst_received_ms", received).apply()
+                                        }
+                                        NmeaGga.parse(sentence)?.let { fix ->
+                                            fixes++
+                                            output.write(RtkCoordinateExport.row(received, fix, SurveyConfig.load(this)))
+                                            output.flush()
+                                            prefs.edit().putString("quality", fix[3]).putString("satellites", fix[4])
+                                                .putString("lat", fix[1]).putString("lon", fix[2])
+                                                .putString("hdop", fix[5]).putLong("last_fix_ms", received).apply()
+                                        }
+                                        prefs.edit().putInt("sentences", count).putInt("fixes", fixes).apply()
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                if (running.get()) prefs.edit().putString("state", "reconnecting")
+                                    .putString("detail", e.message ?: "Connection lost").remove("last_fix_ms").apply()
+                            } finally {
+                                try { tcp?.close() } catch (_: Exception) {}
+                                tcp = null
+                            }
+                            if (running.get()) Thread.sleep(3000)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (running.get()) prefs.edit().putString("state", "error")
+                    .putString("detail", e.message ?: "Wi-Fi RTK error").apply()
+            } finally {
+                running.set(false)
+                stopSelf()
+            }
+        }.also { it.start() }
+        return START_NOT_STICKY
+    }
+    override fun onDestroy() {
+        running.set(false)
+        try { tcp?.close() } catch (_: Exception) {}
+        prefs.edit().putString("state", "disconnected").remove("last_fix_ms").apply()
+        super.onDestroy()
+    }
+}
