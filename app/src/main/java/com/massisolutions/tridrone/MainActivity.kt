@@ -11,8 +11,16 @@ import java.util.Locale
 import java.text.DateFormat
 import java.util.Date
 import android.graphics.Typeface
+import android.graphics.Color
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 
-class MainActivity : Activity() {
+class MainActivity : Activity(), LocationListener {
+    private lateinit var gpsBar: TextView
+    private lateinit var gpsMetrics: TextView
+    private lateinit var locationManager: LocationManager
+    private var previewFix: Location? = null
     private lateinit var rtkStatus: TextView
     private lateinit var status: TextView
     private lateinit var details: TextView
@@ -45,6 +53,11 @@ class MainActivity : Activity() {
         }
         layout.addView(label("TRIDRONE  |  SURVEY DASHBOARD", 23f).apply { setTypeface(null, Typeface.BOLD) })
         layout.addView(label("GNSS acquisition  •  Offline  •  Field mode", 14f))
+        gpsBar = label("GNSS STATUS • SEARCHING", 19f).apply { setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE); setBackgroundColor(Color.DKGRAY); setPadding(20,20,20,20) }
+        gpsMetrics = label("Horizontal: —\nVertical: —", 17f)
+        layout.addView(gpsBar)
+        layout.addView(gpsMetrics)
+        locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
         status = label("Checking logger status...", 19f)
         details = label("Waiting for GPS observations", 17f)
         sessions = label("No sessions yet", 15f)
@@ -109,10 +122,52 @@ class MainActivity : Activity() {
         super.onResume()
         handler.removeCallbacks(refresh)
         handler.post(refresh)
+        startPreview()
     }
     override fun onPause() {
         handler.removeCallbacks(refresh)
+        if (::locationManager.isInitialized) locationManager.removeUpdates(this)
         super.onPause()
+    }
+    override fun onLocationChanged(location: Location) { previewFix = location }
+    private fun startPreview() {
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 51)
+            return
+        }
+        try {
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, this, Looper.getMainLooper())
+        } catch (_: Exception) {}
+    }
+    private fun updateGnssPreview() {
+        val r = getSharedPreferences("rtk_status", MODE_PRIVATE)
+        val age = System.currentTimeMillis() - r.getLong("last_fix_ms", 0L)
+        val fresh = r.getString("state", "") == "connected" && age in 0..5000
+        val quality = if (fresh) r.getString("quality", "") else ""
+        val phone = previewFix?.takeIf { System.currentTimeMillis() - it.time in 0..10000 }
+        val state = when {
+            quality == "4" -> "RTK FIX"
+            quality == "5" -> "RTK FLOAT"
+            fresh -> "RS2+ • NOT FIXED"
+            phone != null -> "PHONE GPS"
+            else -> "NO LIVE FIX"
+        }
+        gpsBar.text = "●  GNSS STATUS  •  $state"
+        gpsBar.setBackgroundColor(when (state) {
+            "RTK FIX" -> Color.rgb(21, 119, 78)
+            "RTK FLOAT" -> Color.rgb(172, 109, 19)
+            "PHONE GPS" -> Color.rgb(40, 89, 149)
+            else -> Color.rgb(124, 56, 56)
+        })
+        val h = if (fresh) "Unavailable (GGA HDOP is not accuracy)"
+            else if (phone?.hasAccuracy() == true) String.format(Locale.US, "%.1f m • phone estimate", phone.accuracy)
+            else "Unavailable"
+        val v = if (fresh) "Unavailable (requires receiver accuracy message)"
+            else if (phone != null && Build.VERSION.SDK_INT >= 26 && phone.hasVerticalAccuracy())
+                String.format(Locale.US, "%.1f m • phone estimate", phone.verticalAccuracyMeters)
+            else "Unavailable"
+        gpsMetrics.text = "Horizontal accuracy: $h\\nVertical accuracy: $v\\n" +
+            (if (fresh) "RS2+ satellites: " + r.getString("satellites", "—") + " • HDOP: " + r.getString("hdop", "—") else "Awaiting external RTK")
     }
     private fun showSurveySettings() {
         val current = SurveyConfig.load(this)
@@ -193,6 +248,7 @@ class MainActivity : Activity() {
     }
     private fun latest(): File? = File(filesDir, "surveys").listFiles { f -> f.isFile && f.extension == "csv" }?.maxByOrNull { it.lastModified() }
     private fun updateDisplay() {
+        updateGnssPreview()
         val rp = getSharedPreferences("rtk_status", MODE_PRIVATE)
         val rtkAge = (System.currentTimeMillis() - rp.getLong("last_fix_ms", 0L)) / 1000
         val quality = rp.getString("quality", "?") ?: "?"
