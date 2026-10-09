@@ -48,15 +48,17 @@ class MainActivity : Activity() {
         status = label("Checking logger status...", 19f)
         details = label("Waiting for GPS observations", 17f)
         sessions = label("No sessions yet", 15f)
-        layout.addView(label("HORIZONTAL COORDINATE SYSTEM", 15f))
+        layout.addView(Button(this).apply { text = "SURVEY SETTINGS / COORDINATE SYSTEMS"; setOnClickListener { showSurveySettings() } })
+        layout.addView(label("HORIZONTAL COORDINATE SYSTEM (CONFIGURATION)", 15f))
         crsSpinner = Spinner(this)
         crsSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, crsLabels)
         val settings = getSharedPreferences("survey_settings", MODE_PRIVATE)
-        crsSpinner.setSelection(if (settings.getString("crs", "EPSG:6539") == "EPSG:4326") 1 else 0)
+        crsSpinner.setSelection(if (SurveyConfig.load(this).horizontal == "EPSG:4326") 1 else 0)
         crsSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
-                settings.edit().putString("crs", crsCodes[position]).apply()
+                val current = SurveyConfig.load(this@MainActivity)
+                SurveyConfig.save(this@MainActivity, current.copy(horizontal = crsCodes[position]))
                 updateDisplay()
             }
         }
@@ -111,6 +113,54 @@ class MainActivity : Activity() {
     override fun onPause() {
         handler.removeCallbacks(refresh)
         super.onPause()
+    }
+    private fun showSurveySettings() {
+        val current = SurveyConfig.load(this)
+        val container = ScrollView(this)
+        val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 20, 28, 20) }
+        fun heading(t: String) { form.addView(TextView(this).apply { text = t; textSize = 16f; setPadding(0, 14, 0, 8) }) }
+        heading("Project name (optional)")
+        val project = EditText(this).apply { setSingleLine(); setText(current.project); hint = "Survey project" }
+        form.addView(project)
+        heading("Horizontal output coordinate system")
+        val horizontal = Spinner(this)
+        val options = listOf("EPSG:6539 — NAD83(2011) NY Long Island ftUS", "EPSG:4326 — WGS 84 geographic")
+        horizontal.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, options)
+        horizontal.setSelection(if (current.horizontal == "EPSG:4326") 1 else 0)
+        form.addView(horizontal)
+        heading("Favorites")
+        val favorite = CheckBox(this).apply { text = "Favorite selected horizontal CRS"; isChecked = current.horizontal in current.favorites }
+        form.addView(favorite)
+        heading("Vertical reference")
+        form.addView(TextView(this).apply { text = "EPSG:6360 — NAVD88, US survey feet (configuration only; no elevations without vertical control)" })
+        heading("Display units")
+        val units = Spinner(this)
+        units.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("US survey feet", "Meters"))
+        units.setSelection(if (current.units == "m") 1 else 0)
+        form.addView(units)
+        heading("Source geodetic datum (verify receiver output)")
+        val source = Spinner(this)
+        source.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
+            listOf("UNKNOWN — preserve raw, no projected output", "EPSG:6318 — NAD83(2011), independently verified"))
+        source.setSelection(if (current.source == "EPSG:6318") 1 else 0)
+        form.addView(source)
+        form.addView(TextView(this).apply {
+            text = "Selecting EPSG:6318 is an assertion about the incoming receiver coordinates, NOT an automatic transformation. Verify receiver configuration, datum realization/epoch and independent control. Android phone GPS remains unverified. No WGS84-to-NAD83(2011) datum operation is installed."
+            setPadding(0, 20, 0, 12)
+        })
+        container.addView(form)
+        android.app.AlertDialog.Builder(this).setTitle("Survey settings").setView(container)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                val horizontalCode = if (horizontal.selectedItemPosition == 0) "EPSG:6539" else "EPSG:4326"
+                val favorites = current.favorites.toMutableSet()
+                if (favorite.isChecked) favorites.add(horizontalCode) else favorites.remove(horizontalCode)
+                SurveyConfig.save(this, SurveySettings(project.text.toString().trim(), horizontalCode,
+                    "EPSG:6360", if (units.selectedItemPosition == 0) "usft" else "m",
+                    if (source.selectedItemPosition == 0) "UNKNOWN" else "EPSG:6318", favorites))
+                crsSpinner.setSelection(horizontal.selectedItemPosition)
+                Toast.makeText(this, "Settings saved; new sessions capture metadata", Toast.LENGTH_LONG).show()
+            }.show()
     }
     private fun connectRtk() {
         if (Build.VERSION.SDK_INT >= 31 &&
@@ -176,7 +226,7 @@ class MainActivity : Activity() {
         precision.text = if (accuracy < 0f) "Horizontal accuracy: unavailable" else
             "Horizontal accuracy: " + String.format(Locale.US, "%.1f m  |  %.1f ft", accuracy, accuracy * 3.280839895) +
             "  (phone estimate)"
-        val selectedCrs = getSharedPreferences("survey_settings", MODE_PRIVATE).getString("crs", "EPSG:6539")
+        val selectedCrs = SurveyConfig.load(this).horizontal
         details.text = if (lat != null && lon != null) {
             "Latitude: $lat\nLongitude: $lon\nHorizontal accuracy: " +
                 (if (accuracy >= 0) String.format(Locale.US, "%.1f m", accuracy) else "Unknown") +
