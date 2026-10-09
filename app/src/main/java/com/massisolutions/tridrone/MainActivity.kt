@@ -17,6 +17,33 @@ import android.location.LocationListener
 import android.location.LocationManager
 
 class MainActivity : Activity(), LocationListener {
+    private var simulationActive = false
+    private var simulationWriter: java.io.BufferedWriter? = null
+    private var simulationFile: File? = null
+    private var simulationCount = 0
+    private lateinit var simulationStatus: TextView
+    private val simulationTick = object : Runnable {
+        override fun run() {
+            if (!simulationActive) return
+            val p = getSharedPreferences("rtk_status", MODE_PRIVATE)
+            val now = System.currentTimeMillis()
+            val age = now - p.getLong("last_fix_ms", 0L)
+            val lat = p.getString("lat", "")?.toDoubleOrNull()
+            val lon = p.getString("lon", "")?.toDoubleOrNull()
+            val quality = p.getString("quality", "")
+            if (p.getString("state", "") == "connected" && age in 0..3000 && lat != null && lon != null) {
+                val depth = 2.5 + kotlin.math.sin(simulationCount * 0.12) * 0.4
+                val accepted = quality == "4"
+                try {
+                    simulationWriter?.write(String.format(Locale.US, "%d,%d,%.9f,%.9f,%s,%.3f,%s,SIMULATED,UNVERIFIED_OFFSETS,NO_VERTICAL_DATUM\\n", now, p.getLong("last_fix_ms", 0L), lat, lon, quality, depth, if (accepted) "RTK_FIXED_GNSS" else "GNSS_NOT_FIXED"))
+                    simulationWriter?.flush()
+                    simulationCount++
+                } catch (e: Exception) { stopSimulation(); Toast.makeText(this@MainActivity, "Simulation write failed: ${e.message}", Toast.LENGTH_LONG).show(); return }
+            }
+            simulationStatus.text = "SIMULATION ONLY • $simulationCount synthetic depth events • GNSS ${if (age in 0..3000) "live" else "stale"} • ${if (quality == "4") "FIX" else "NOT FIXED"}"
+            handler.postDelayed(this, 1000)
+        }
+    }
     private lateinit var setupStatus: TextView
     private lateinit var setupNext: Button
     private lateinit var setupSounder: LinearLayout
@@ -180,6 +207,17 @@ class MainActivity : Activity(), LocationListener {
         }
         wizard.addView(setupNext)
         wizard.addView(heading("Sounder-driven, timestamped continuous recording will unlock only after both streams and offsets are validated.", 14f))
+        wizard.addView(heading("DEVELOPMENT TEST — SIMULATED SOUNDER", 17f).apply { setTypeface(null, Typeface.BOLD) })
+        wizard.addView(heading("Synthetic depths are generated once per second and paired with the latest live Emlid GGA. TEST DATA ONLY: no sounder, offset correction, vertical datum, or validated synchronization.", 13f))
+        simulationStatus = heading("Simulation stopped", 15f)
+        wizard.addView(simulationStatus)
+        wizard.addView(Button(this).apply { text = "START SIMULATED DEPTH RECORDING"; setOnClickListener { startSimulation() } })
+        wizard.addView(Button(this).apply { text = "STOP SIMULATION"; setOnClickListener { stopSimulation() } })
+        wizard.addView(Button(this).apply { text = "EXPORT SIMULATION CSV"; setOnClickListener {
+            val file = simulationFile
+            if (file == null || !file.exists()) Toast.makeText(this@MainActivity, "No simulation file yet", Toast.LENGTH_SHORT).show()
+            else exportFile(file)
+        } })
         wizard.addView(Button(this).apply {
             text = "CHECK FOR APP UPDATES"
             setOnClickListener { AppUpdater.open(this@MainActivity) }
@@ -248,6 +286,41 @@ class MainActivity : Activity(), LocationListener {
             else "Unavailable"
         gpsMetrics.text = "Receiver horizontal precision: $h\nReceiver vertical precision: $v\n" +
             (if (fresh) "RS2+ satellites: " + r.getString("satellites", "—") + " • HDOP: " + r.getString("hdop", "—") else "Awaiting external RTK")
+    }
+    private fun startSimulation() {
+        if (simulationActive) return
+        val p = getSharedPreferences("rtk_status", MODE_PRIVATE)
+        if (p.getString("state", "") != "connected" || System.currentTimeMillis() - p.getLong("last_fix_ms", 0L) !in 0..3000) {
+            Toast.makeText(this, "Connect live Emlid NMEA first", Toast.LENGTH_LONG).show()
+            return
+        }
+        try {
+            val folder = File(filesDir, "surveys").apply { mkdirs() }
+            val file = File(folder, "SIMULATED_DEPTH_${System.currentTimeMillis()}.csv")
+            simulationWriter = file.bufferedWriter()
+            simulationWriter?.write("event_utc_ms,gnss_received_utc_ms,latitude_deg,longitude_deg,gga_quality,simulated_depth_m,gnss_flag,data_source,offset_status,vertical_status\\n")
+            simulationWriter?.flush()
+            simulationFile = file
+            simulationCount = 0
+            simulationActive = true
+            simulationStatus.text = "SIMULATION RUNNING • NOT SURVEY DATA"
+            handler.post(simulationTick)
+        } catch (e: Exception) {
+            stopSimulation()
+            Toast.makeText(this, "Cannot start simulation: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+    private fun stopSimulation() {
+        simulationActive = false
+        handler.removeCallbacks(simulationTick)
+        try { simulationWriter?.close() } catch (_: Exception) {}
+        simulationWriter = null
+        if (::simulationStatus.isInitialized) simulationStatus.text = "Simulation stopped • $simulationCount test events"
+    }
+    override fun onDestroy() {
+        stopSimulation()
+        handler.removeCallbacks(refresh)
+        super.onDestroy()
     }
     private fun showSurveySettings() {
         val current = SurveyConfig.load(this)
