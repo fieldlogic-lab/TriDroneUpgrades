@@ -66,10 +66,10 @@ object AppUpdater {
                 connection.connectTimeout = 12000
                 connection.readTimeout = 12000
                 connection.instanceFollowRedirects = false
-                val json = connection.use { c ->
-                    if (c.responseCode != 200) error("Update feed HTTP ${c.responseCode}")
-                    JSONObject(c.inputStream.bufferedReader().use { it.readText() })
-                }
+                val json = try {
+                    if (connection.responseCode != 200) error("Update feed HTTP ${connection.responseCode}")
+                    JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+                } finally { connection.disconnect() }
                 val version = json.getInt("versionCode")
                 val apkUrl = json.getString("apkUrl")
                 val sha256 = json.getString("sha256").lowercase()
@@ -104,7 +104,8 @@ object AppUpdater {
                 c.instanceFollowRedirects = false
                 val file = File(activity.cacheDir, "tridrone-update.apk")
                 val digest = MessageDigest.getInstance("SHA-256")
-                c.use { conn ->
+                try {
+                    val conn = c
                     if (conn.responseCode != 200) error("APK HTTP ${conn.responseCode}")
                     require(conn.contentLengthLong in 1..100_000_000) { "Invalid APK size" }
                     conn.inputStream.use { input ->
@@ -121,7 +122,7 @@ object AppUpdater {
                             }
                         }
                     }
-                }
+                } finally { c.disconnect() }
                 val actual = digest.digest().joinToString("") { "%02x".format(it) }
                 require(actual == expected) { "SHA-256 verification failed" }
                 activity.runOnUiThread {
