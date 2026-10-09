@@ -63,7 +63,7 @@ class RtkService : Service() {
                 rawWriter = BufferedWriter(FileWriter(File(folder, "rtk_nmea_$session.csv")))
                 fixWriter = BufferedWriter(FileWriter(File(folder, "rtk_fixes_$session.csv")))
                 rawWriter?.write("received_utc_ms,nmea_sentence\n")
-                fixWriter?.write("received_utc_ms,utc_time,latitude_deg,longitude_deg,fix_quality,satellites,hdop,altitude_m,geoid_separation_m,correction_age_s,station_id\n")
+                fixWriter?.write(RtkCoordinateExport.header)
                 rawWriter?.flush(); fixWriter?.flush()
                 prefs.edit().putString("session", session).putInt("sentences", 0).putInt("fixes", 0).apply()
                 report("connected", address)
@@ -88,7 +88,7 @@ class RtkService : Service() {
                             val fix = NmeaGga.parse(sentence)
                             if (fix != null) {
                                 fixes++
-                                fixWriter?.write("$received,${fix.joinToString(",")}\n")
+                                fixWriter?.write(RtkCoordinateExport.row(received, fix, SurveyConfig.load(this)))
                                 fixWriter?.flush()
                                 prefs.edit().putString("quality", fix[3]).putString("satellites", fix[4])
                                     .putString("lat", fix[1]).putString("lon", fix[2])
