@@ -1,4 +1,5 @@
 name: Build TriDrone Android APK
+# Signed distribution activation check
 on:
   push:
     branches: [main]
