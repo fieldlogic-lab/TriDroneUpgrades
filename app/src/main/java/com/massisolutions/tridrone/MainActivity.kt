@@ -200,6 +200,10 @@ class MainActivity : Activity(), LocationListener {
             }
         })
         wizard.addView(setupSounder)
+        wizard.addView(Button(this).apply {
+            text = "OPEN LIVE GNSS MAP"
+            setOnClickListener { showLiveRtkMap() }
+        })
         wizard.addView(heading("3  CONTINUOUS HYDROGRAPHIC COLLECTION", 19f))
         setupNext = Button(this).apply {
             text = "START RECORDING — WAITING FOR VALID STREAMS"
@@ -504,6 +508,66 @@ class MainActivity : Activity(), LocationListener {
         val file = latest()
         sessions.text = if (file == null) "No CSV session found" else
             "${file.name}\n${file.length()} bytes"
+    }
+    private fun showLiveRtkMap() {
+        val map = SurveyMapView(this)
+        val statusLabel = TextView(this).apply {
+            textSize = 16f
+            setPadding(20, 14, 20, 14)
+        }
+        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        container.addView(statusLabel)
+        container.addView(map, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (resources.displayMetrics.heightPixels * 0.62f).toInt()
+        ))
+        val track = mutableListOf<Pair<Double, Double>>()
+        var lastTimestamp = 0L
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Live Emlid GNSS track")
+            .setView(container)
+            .setPositiveButton("Close", null)
+            .create()
+        val ticker = object : Runnable {
+            override fun run() {
+                if (!dialog.isShowing) return
+                val p = getSharedPreferences("rtk_status", MODE_PRIVATE)
+                val timestamp = p.getLong("last_fix_ms", 0L)
+                val age = System.currentTimeMillis() - timestamp
+                val lat = p.getString("lat", null)?.toDoubleOrNull()
+                val lon = p.getString("lon", null)?.toDoubleOrNull()
+                val valid = p.getString("state", "") == "connected" &&
+                    age in 0..5000 && lat != null && lon != null &&
+                    lat in -90.0..90.0 && lon in -180.0..180.0
+                val quality = when (p.getString("quality", "")) {
+                    "4" -> "RTK FIX"
+                    "5" -> "RTK FLOAT"
+                    "2" -> "DGPS"
+                    "1" -> "SINGLE"
+                    else -> "NO FIX"
+                }
+                if (valid) {
+                    val point = Pair(lat!!, lon!!)
+                    map.current = point
+                    if (timestamp > lastTimestamp) {
+                        track.add(point)
+                        lastTimestamp = timestamp
+                        map.tracks = listOf(track.toList())
+                    }
+                } else {
+                    map.current = null
+                }
+                statusLabel.text = "Emlid RS2+ • " +
+                    (if (valid) quality else "STREAM STALE / DISCONNECTED") +
+                    "\\nTrack positions: ${track.size} • Satellites: " +
+                    p.getString("satellites", "—") +
+                    "\\nLive preview only • not saved as a survey"
+                handler.postDelayed(this, 500L)
+            }
+        }
+        dialog.setOnShowListener { handler.post(ticker) }
+        dialog.setOnDismissListener { handler.removeCallbacks(ticker) }
+        dialog.show()
     }
     private fun showSurveyMap() {
         val files = File(filesDir, "surveys").listFiles { f -> f.isFile && f.extension == "csv" }
