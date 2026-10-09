@@ -285,7 +285,7 @@ class MainActivity : Activity(), LocationListener {
         val quality = rp.getString("quality", "?") ?: "?"
         val fixLabel = when(quality) { "4" -> "RTK FIX"; "5" -> "RTK FLOAT"; "2" -> "DGPS"; "1" -> "SINGLE"; "0" -> "INVALID"; else -> "UNKNOWN" }
         rtkStatus.text = "RTK: " + rp.getString("state", "disconnected") + " • " + rp.getString("detail", "") +
-            "\\nFix: " + fixLabel + " • Satellites: " + rp.getString("satellites", "—") +
+            "\nFix: " + fixLabel + " • Satellites: " + rp.getString("satellites", "—") +
             " • NMEA: " + rp.getInt("sentences", 0) + " • GGA: " + rp.getInt("fixes", 0) +
             (if (rp.getLong("last_fix_ms", 0L) > 0) " • Last GGA: " + rtkAge + "s ago" else "")
         val p = getSharedPreferences("logger_status", MODE_PRIVATE)
