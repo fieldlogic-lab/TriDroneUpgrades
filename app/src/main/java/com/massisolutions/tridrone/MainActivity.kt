@@ -35,7 +35,7 @@ class MainActivity : Activity(), LocationListener {
                 val depth = 2.5 + kotlin.math.sin(simulationCount * 0.12) * 0.4
                 val accepted = quality == "4"
                 try {
-                    simulationWriter?.write(String.format(Locale.US, "%d,%d,%.9f,%.9f,%s,%.3f,%s,SIMULATED,UNVERIFIED_OFFSETS,NO_VERTICAL_DATUM\\n", now, p.getLong("last_fix_ms", 0L), lat, lon, quality, depth, if (accepted) "RTK_FIXED_GNSS" else "GNSS_NOT_FIXED"))
+                    simulationWriter?.write(String.format(Locale.US, "%d,%d,%.9f,%.9f,%s,%.3f,%s,SIMULATED,UNVERIFIED_OFFSETS,NO_VERTICAL_DATUM\n", now, p.getLong("last_fix_ms", 0L), lat, lon, quality, depth, if (accepted) "RTK_FIXED_GNSS" else "GNSS_NOT_FIXED"))
                     simulationWriter?.flush()
                     simulationCount++
                 } catch (e: Exception) { stopSimulation(); Toast.makeText(this@MainActivity, "Simulation write failed: ${e.message}", Toast.LENGTH_LONG).show(); return }
@@ -302,7 +302,7 @@ class MainActivity : Activity(), LocationListener {
             val folder = File(filesDir, "surveys").apply { mkdirs() }
             val file = File(folder, "SIMULATED_DEPTH_${System.currentTimeMillis()}.csv")
             simulationWriter = file.bufferedWriter()
-            simulationWriter?.write("event_utc_ms,gnss_received_utc_ms,latitude_deg,longitude_deg,gga_quality,simulated_depth_m,gnss_flag,data_source,offset_status,vertical_status\\n")
+            simulationWriter?.write("event_utc_ms,gnss_received_utc_ms,latitude_deg,longitude_deg,gga_quality,simulated_depth_m,gnss_flag,data_source,offset_status,vertical_status\n")
             simulationWriter?.flush()
             simulationFile = file
             simulationCount = 0
@@ -454,8 +454,8 @@ class MainActivity : Activity(), LocationListener {
         }
         setupStatus.text = "GNSS: " + (gnss.getString("state", "disconnected") ?: "disconnected") +
             (if (live) "  •  $fixType" else "  •  awaiting live GGA") +
-            "\\n" + (gnss.getString("detail", "") ?: "") +
-            "\\nGGA: " + gnss.getInt("fixes", 0)
+            "\n" + (gnss.getString("detail", "") ?: "") +
+            "\nGGA: " + gnss.getInt("fixes", 0)
         setupSounder.alpha = if (live) 1f else 0.65f
         val rt = getSharedPreferences("rtk_status", MODE_PRIVATE)
         val rtAge = System.currentTimeMillis() - rt.getLong("last_fix_ms", 0L)
@@ -559,9 +559,9 @@ class MainActivity : Activity(), LocationListener {
                 }
                 statusLabel.text = "Emlid RS2+ • " +
                     (if (valid) quality else "STREAM STALE / DISCONNECTED") +
-                    "\\nTrack positions: ${track.size} • Satellites: " +
+                    "\nTrack positions: ${track.size} • Satellites: " +
                     p.getString("satellites", "—") +
-                    "\\nLive preview only • not saved as a survey"
+                    "\nLive preview only • not saved as a survey"
                 handler.postDelayed(this, 500L)
             }
         }
@@ -588,7 +588,7 @@ class MainActivity : Activity(), LocationListener {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val info = TextView(this).apply {
             text = "All saved tracks: " + files.size + "  |  Recorded points: " + tracks.sumOf { it.size } +
-                "\\nBlue: latest track  •  Gray: earlier tracks  •  Green: live position"
+                "\nBlue: latest track  •  Gray: earlier tracks  •  Green: live position"
             textSize = 14f
             setPadding(20, 16, 20, 12)
         }
@@ -640,15 +640,15 @@ class MainActivity : Activity(), LocationListener {
                 val time = values.getOrNull(0)?.toLongOrNull()?.let {
                     java.text.DateFormat.getTimeInstance().format(java.util.Date(it))
                 } ?: "unknown"
-                "#"+(i+1)+"  "+time+"\\nLat: "+(values.getOrNull(2) ?: "—")+
+                "#"+(i+1)+"  "+time+"\nLat: "+(values.getOrNull(2) ?: "—")+
                     "  Lon: "+(values.getOrNull(3) ?: "—")+
-                    "\\nAccuracy: "+(values.getOrNull(4) ?: "—")+" m"
-            }.joinToString("\\n\\n")
+                    "\nAccuracy: "+(values.getOrNull(4) ?: "—")+" m"
+            }.joinToString("\n\n")
             val view = ScrollView(this)
             view.addView(TextView(this).apply {
                 textSize = 15f
                 setPadding(28, 20, 28, 20)
-                text = file.name + "\\nRecorded observations: " + lines.drop(1).size + "\\n\\n" + body
+                text = file.name + "\nRecorded observations: " + lines.drop(1).size + "\n\n" + body
                 setTextIsSelectable(true)
             })
             android.app.AlertDialog.Builder(this).setTitle("Recorded GPS points")
