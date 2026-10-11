@@ -91,7 +91,7 @@ class RtkService : Service() {
                             count++
                             val gst = NmeaGst.parse(sentence)
                             if (gst != null) prefs.edit().putString("h_sigma_m", gst.first.toString()).putString("v_sigma_m", gst.second.toString()).putLong("gst_received_ms", received).apply()
-                            val fix = NmeaGga.parse(sentence)
+                            val fix = NmeaGnssAdapter.parseGga(sentence, received)?.let { NmeaGga.parse(sentence) }
                             if (fix != null) {
                                 fixes++
                                 fixWriter?.write(RtkCoordinateExport.row(received, fix, SurveyConfig.load(this)))
@@ -228,7 +228,8 @@ class WifiRtkService : Service() {
                                                 .putString("v_sigma_m", gst.second.toString())
                                                 .putLong("gst_received_ms", received).apply()
                                         }
-                                        NmeaGga.parse(sentence)?.let { fix ->
+                                        NmeaGnssAdapter.parseGga(sentence, received)?.let { observation ->
+                                            val fix = NmeaGga.parse(sentence) ?: return@let
                                             fixes++
                                             output.write(RtkCoordinateExport.row(received, fix, SurveyConfig.load(this)))
                                             output.flush()
