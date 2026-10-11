@@ -31,6 +31,10 @@ class MainActivity : Activity(), LocationListener {
     private lateinit var demoStatus: TextView
     private lateinit var liveCards: LinearLayout
     private lateinit var demoCards: LinearLayout
+    private lateinit var liveGnssActions: LinearLayout
+    private lateinit var demoGnssActions: LinearLayout
+    private lateinit var liveSounderActions: LinearLayout
+    private lateinit var demoSounderActions: LinearLayout
     private val demoTick = object : Runnable {
         override fun run() {
             if (!demoRecording || !demoMode) return
@@ -67,6 +71,12 @@ class MainActivity : Activity(), LocationListener {
         demoGnssButton.isEnabled = !demoRecording
         demoRecordButton.isEnabled = demoGnss && demoSounder
         demoRecordButton.text = if (demoRecording) "Stop demo recording" else "Start demo recording"
+        if (::setupNext.isInitialized) {
+            setupNext.isEnabled = demoMode && demoGnss && demoSounder
+            setupNext.text = if (demoMode) (if (demoRecording) "Stop recording" else "Start recording") else "Recording unavailable — setup incomplete"
+        }
+        if (::setupStatus.isInitialized && demoMode) setupStatus.text = if (demoGnss) "SIMULATED RTK FIX" else "Awaiting demo GNSS"
+        if (::sounderStatus.isInitialized && demoMode) sounderStatus.text = if (demoSounder) "SIMULATED DEPTH CONNECTED" else "Awaiting demo sounder"
         demoStatus.text = "DEMO ONLY  •  ${demoCount} synthetic observations\\n" +
             "GNSS: ${if (demoGnss) "SIMULATED FIX" else "NOT CONNECTED"}  •  " +
             "Depth: ${if (demoSounder) "SIMULATED" else "NOT CONNECTED"}"
@@ -79,8 +89,12 @@ class MainActivity : Activity(), LocationListener {
         demoGnss = false
         demoSounder = false
         demoCount = 0
-        liveCards.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
-        demoCards.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
+        liveGnssActions.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
+        demoGnssActions.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
+        liveSounderActions.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
+        demoSounderActions.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
+        setupNext.isEnabled = enabled && demoGnss && demoSounder
+        setupNext.text = if (enabled) "Start demo recording" else "Recording unavailable — setup incomplete"
         modeLabel.text = if (enabled) "DEMO MODE  •  SYNTHETIC DATA" else "LIVE SURVEY  •  REAL HARDWARE"
         updateDemoUi()
     }
@@ -302,8 +316,14 @@ class MainActivity : Activity(), LocationListener {
         val gnssCard = section("01   GNSS RECEIVER", "Reach RS2+  /  Wi-Fi NMEA preferred")
         setupStatus = heading("Waiting for receiver", 15f, muted)
         gnssCard.addView(setupStatus)
-        gnssCard.addView(action("Connect Emlid via Wi-Fi") { showWifiRtkSetup() })
-        gnssCard.addView(action("Bluetooth backup") { connectRtk() })
+        liveGnssActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        liveGnssActions.addView(action("Connect Emlid via Wi-Fi") { showWifiRtkSetup() })
+        liveGnssActions.addView(action("Bluetooth backup") { connectRtk() })
+        gnssCard.addView(liveGnssActions)
+        demoGnssActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
+        demoGnssButton = action("Connect demo GNSS") { demoGnss = true; updateDemoUi() }
+        demoGnssActions.addView(demoGnssButton)
+        gnssCard.addView(demoGnssActions)
         val sounderCard = section("02   DEPTH SOUNDER", "HydroLite Plus  /  hardware verification pending")
         setupSounder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         setupSounder.addView(heading("No verified depth stream", 14f, muted))
@@ -313,16 +333,28 @@ class MainActivity : Activity(), LocationListener {
                 .setMessage("Bluetooth transport and depth message protocol must be verified against the actual instrument. Live depth connection is not yet implemented.")
                 .setPositiveButton("OK", null).show()
         })
-        sounderCard.addView(setupSounder)
+        liveSounderActions = setupSounder
+        sounderCard.addView(liveSounderActions)
+        demoSounderActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
+        demoSounderButton = action("Connect demo sounder") { if (demoGnss) demoSounder = true; updateDemoUi() }
+        demoSounderActions.addView(demoSounderButton)
+        sounderCard.addView(demoSounderActions)
         val captureCard = section("03   SURVEY COLLECTION", "Continuous GNSS + depth logging")
-        setupNext = action("Recording unavailable — setup incomplete") {}
+        setupNext = action("Recording unavailable — setup incomplete") {
+            if (demoMode) { if (demoRecording) stopDemoRecording() else startDemoRecording(); updateDemoUi() }
+        }
         setupNext.isEnabled = false
         captureCard.addView(setupNext)
         captureCard.addView(heading("Recording stays locked until real depth, offsets and synchronization are verified.", 13f, muted))
         val reviewCard = section("SESSIONS & REVIEW", "Inspect observations after recovery")
-        reviewCard.addView(action("Saved surveys and points") { showSavedSurveys() })
-        reviewCard.addView(action("Open survey map") { showSurveyMap() })
-        reviewCard.addView(action("Export latest CSV") { exportLatest() })
+        reviewCard.addView(action("Saved surveys and points") { if (demoMode) showDemoReview() else showSavedSurveys() })
+        reviewCard.addView(action("Open survey map") { if (demoMode) showDemoReview() else showSurveyMap() })
+        reviewCard.addView(action("Export latest CSV") {
+            if (demoMode) {
+                val file = File(filesDir, "demo_surveys").listFiles { f -> f.isFile && f.extension == "csv" }?.maxByOrNull { it.lastModified() }
+                if (file != null) exportFile(file) else Toast.makeText(this@MainActivity, "No demo sessions yet", Toast.LENGTH_SHORT).show()
+            } else exportLatest()
+        })
         val toolsCard = section("SETTINGS & DIAGNOSTICS", "Advanced tools, configuration and tests")
         toolsCard.addView(action("Survey settings / coordinate systems") { showSurveySettings() })
         toolsCard.addView(action("Check for app updates") { AppUpdater.open(this@MainActivity) })
@@ -342,32 +374,9 @@ class MainActivity : Activity(), LocationListener {
                 Toast.makeText(this@MainActivity, "No simulation file yet", Toast.LENGTH_SHORT).show()
             else exportFile(file)
         })
-        val demoTitle = heading("TRAINING / DEMO", 20f, cyan)
-        demoCards.addView(demoTitle)
-        demoCards.addView(heading("Simulated receivers; no Bluetooth, Wi-Fi or live survey services are used.", 14f, muted))
-        demoGnssButton = action("Connect demo GNSS") {
-            demoGnss = true
-            updateDemoUi()
-        }
-        demoCards.addView(demoGnssButton)
-        demoSounderButton = action("Connect demo sounder") {
-            if (demoGnss) demoSounder = true
-            updateDemoUi()
-        }
-        demoCards.addView(demoSounderButton)
-        demoRecordButton = action("Start demo recording") {
-            if (demoRecording) stopDemoRecording() else startDemoRecording()
-            updateDemoUi()
-        }
-        demoCards.addView(demoRecordButton)
-        demoStatus = heading("DEMO ONLY", 15f, muted)
-        demoCards.addView(demoStatus)
-        demoCards.addView(action("Review demo sessions / map") { showDemoReview() })
-        demoCards.addView(action("Export latest demo CSV") {
-            val file = demoFile
-            if (file != null && file.exists()) exportFile(file)
-            else Toast.makeText(this@MainActivity, "No demo session yet", Toast.LENGTH_SHORT).show()
-        })
+        demoRecordButton = setupNext
+        demoStatus = heading("DEMO ONLY  •  Synthetic observations never enter live surveys", 14f, muted)
+        wizard.addView(demoStatus)
         updateDemoUi()
         legacyPanel = layout
         legacyPanel.visibility = android.view.View.GONE
@@ -594,6 +603,7 @@ class MainActivity : Activity(), LocationListener {
             "\\n" + (gnss.getString("detail", "") ?: "") +
             "\\nGGA: " + gnss.getInt("fixes", 0)
         setupSounder.alpha = if (live) 1f else 0.65f
+        if (demoMode) { updateDemoUi() }
         val rt = getSharedPreferences("rtk_status", MODE_PRIVATE)
         val rtAge = System.currentTimeMillis() - rt.getLong("last_fix_ms", 0L)
         val fixed = rt.getString("state", "") == "connected" && rt.getString("quality", "") == "4" && rtAge in 0..5000
