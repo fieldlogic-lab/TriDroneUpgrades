@@ -24,6 +24,7 @@ class MainActivity : Activity(), LocationListener {
     private val demoRecording get() = modeController.state.recording
     private var demoCount = 0
     private val demoRecorder by lazy { DemoSessionRecorder(this) }
+    private val sessionsRepository by lazy { SessionRepository(filesDir) }
     private var demoFile: File? = null
     private lateinit var modeLabel: TextView
     private lateinit var demoGnssButton: Button
@@ -349,7 +350,7 @@ class MainActivity : Activity(), LocationListener {
         reviewCard.addView(action("Saved surveys and points") { if (demoMode) showDemoReview() else showSavedSurveys() })
         reviewCard.addView(action("Export latest CSV") {
             if (demoMode) {
-                val file = File(filesDir, "demo_surveys").listFiles { f -> f.isFile && f.extension == "csv" }?.maxByOrNull { it.lastModified() }
+                val file = sessionsRepository.latest(SessionRepository.Kind.DEMO)
                 if (file != null) exportFile(file) else Toast.makeText(this@MainActivity, "No demo sessions yet", Toast.LENGTH_SHORT).show()
             } else exportLatest()
         })
@@ -589,7 +590,7 @@ class MainActivity : Activity(), LocationListener {
             Toast.makeText(this, "Bluetooth error: " + e.message, Toast.LENGTH_LONG).show()
         }
     }
-    private fun latest(): File? = File(filesDir, "surveys").listFiles { f -> f.isFile && f.extension == "csv" }?.maxByOrNull { it.lastModified() }
+    private fun latest(): File? = sessionsRepository.latest(SessionRepository.Kind.LIVE)
     private fun updateDisplay() {
         updateGnssPreview()
         val gnss = getSharedPreferences("rtk_status", MODE_PRIVATE)
@@ -720,36 +721,27 @@ class MainActivity : Activity(), LocationListener {
         dialog.show()
     }
     private fun showDemoReview() {
-        val files = File(filesDir, "demo_surveys").listFiles { f ->
-            f.isFile && f.extension.equals("csv", true)
-        }?.sortedByDescending { it.lastModified() } ?: emptyList()
-        if (files.isEmpty()) {
+        val sessions = sessionsRepository.list(SessionRepository.Kind.DEMO)
+        if (sessions.isEmpty()) {
             Toast.makeText(this, "No demo recordings yet. Start and stop a demo session first.", Toast.LENGTH_LONG).show()
             return
         }
-        val labels = files.map { file ->
-            val count = try { file.useLines { it.drop(1).count() } } catch (_: Exception) { 0 }
-            "${file.name}  •  $count observations"
-        }.toTypedArray()
+        val labels = sessions.map { "${it.file.name}  •  ${it.observations} observations" }.toTypedArray()
         android.app.AlertDialog.Builder(this).setTitle("DEMO sessions — synthetic only")
-            .setItems(labels) { _, index -> showDemoSession(files[index]) }
+            .setItems(labels) { _, index -> showDemoSession(sessions[index]) }
             .setNegativeButton("Close", null).show()
     }
 
-    private fun showDemoSession(file: File) {
+    private fun showDemoSession(session: SessionRepository.Session) {
+        val file = session.file
         val samples = try {
-            file.useLines { lines ->
-                lines.drop(1).mapNotNull { line ->
-                    val c = line.split(",")
-                    val lat = c.getOrNull(1)?.toDoubleOrNull()
-                    val lon = c.getOrNull(2)?.toDoubleOrNull()
-                    val depth = c.getOrNull(3)?.toDoubleOrNull()
-                    if (lat != null && lon != null && depth != null &&
-                        lat in -90.0..90.0 && lon in -180.0..180.0)
-                        Triple(lat, lon, depth) else null
-                }.toList()
+            sessionsRepository.read(session).mapNotNull { sample ->
+                sample.depthMeters?.let { Triple(sample.latitude, sample.longitude, it) }
             }
-        } catch (_: Exception) { emptyList<Triple<Double, Double, Double>>() }
+        } catch (e: Exception) {
+            Toast.makeText(this, "Invalid demo session: ${e.message}", Toast.LENGTH_LONG).show()
+            return
+        }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(12, 12, 12, 12)
