@@ -100,6 +100,7 @@ class MainActivity : Activity(), LocationListener {
         setupNext.isEnabled = enabled && demoGnss && demoSounder
         setupNext.text = if (enabled) "Start demo recording" else "Recording unavailable — setup incomplete"
         modeLabel.text = if (enabled) "DEMO MODE  •  SYNTHETIC DATA" else "LIVE SURVEY  •  REAL HARDWARE"
+        demoStatus.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
         updateDemoUi()
     }
     private fun startDemoRecording() {
@@ -749,8 +750,8 @@ class MainActivity : Activity(), LocationListener {
         val minDepth = samples.minOfOrNull { it.third }
         val maxDepth = samples.maxOfOrNull { it.third }
         container.addView(TextView(this).apply {
-            text = "DEMO — SYNTHETIC DATA, NOT FOR SURVEY\\n" +
-                "Observations: ${samples.size}\\n" +
+            text = "DEMO — SYNTHETIC DATA, NOT FOR SURVEY\n" +
+                "Observations: ${samples.size}\n" +
                 "Depth range: ${if (minDepth != null && maxDepth != null) String.format(Locale.US, "%.2f–%.2f m", minDepth, maxDepth) else "—"}"
             textSize = 16f
             setPadding(12, 12, 12, 12)
@@ -760,9 +761,9 @@ class MainActivity : Activity(), LocationListener {
         map.current = null
         container.addView(map, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.48f).toInt()))
         container.addView(TextView(this).apply {
-            text = "First observations:\\n" + samples.take(12).mapIndexed { i, p ->
+            text = "First observations:\n" + samples.take(12).mapIndexed { i, p ->
                 String.format(Locale.US, "%d. %.6f, %.6f  •  %.2f m", i + 1, p.first, p.second, p.third)
-            }.joinToString("\\n")
+            }.joinToString("\n")
             setPadding(12, 12, 12, 12)
         })
         android.app.AlertDialog.Builder(this).setTitle("Demo session review")
