@@ -13,7 +13,8 @@ class SessionRepository(private val root: File) {
     data class Session(val file: File, val kind: Kind, val observations: Int)
 
     fun list(kind: Kind): List<Session> =
-        File(root, kind.directory).listFiles { f -> f.isFile && f.extension.equals("csv", true) &&\n                (kind != Kind.LIVE || f.name.startsWith("gps_")) }
+        File(root, kind.directory).listFiles { f -> f.isFile && f.extension.equals("csv", true) &&
+                (kind != Kind.LIVE || f.name.startsWith("gps_")) }
             ?.sortedWith(compareByDescending<File> { it.lastModified() }.thenByDescending { it.name })
             ?.map { Session(it, kind, countRows(it)) } ?: emptyList()
 
