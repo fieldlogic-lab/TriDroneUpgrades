@@ -42,6 +42,8 @@ jobs:
           else
             echo "::warning::Persistent signing is not configured; in-place updates may fail."
           fi
+      - name: Run JVM regression tests
+        run: gradle --no-daemon :app:testDebugUnitTest
       - name: Compile debug APK
         env:
           TRIDRONE_STORE_PASSWORD: ${{ secrets.TRIDRONE_STORE_PASSWORD }}
