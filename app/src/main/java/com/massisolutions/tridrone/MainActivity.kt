@@ -44,7 +44,7 @@ class MainActivity : Activity(), LocationListener {
             val depth = 2.5 + kotlin.math.sin(demoCount * 0.12) * 0.4
             try {
                 demoWriter?.write(String.format(Locale.US,
-                    "%d,%.9f,%.9f,%.3f,DEMO_SYNTHETIC,NOT_FOR_SURVEY\\n",
+                    "%d,%.9f,%.9f,%.3f,DEMO_SYNTHETIC,NOT_FOR_SURVEY\n",
                     t, lat, lon, depth))
                 demoWriter?.flush()
                 demoCount++
@@ -77,7 +77,7 @@ class MainActivity : Activity(), LocationListener {
         }
         if (::setupStatus.isInitialized && demoMode) setupStatus.text = if (demoGnss) "SIMULATED RTK FIX" else "Awaiting demo GNSS"
         if (::sounderStatus.isInitialized && demoMode) sounderStatus.text = if (demoSounder) "SIMULATED DEPTH CONNECTED" else "Awaiting demo sounder"
-        demoStatus.text = "DEMO ONLY  •  ${demoCount} synthetic observations\\n" +
+        demoStatus.text = "DEMO ONLY  •  ${demoCount} synthetic observations\n" +
             "GNSS: ${if (demoGnss) "SIMULATED FIX" else "NOT CONNECTED"}  •  " +
             "Depth: ${if (demoSounder) "SIMULATED" else "NOT CONNECTED"}"
     }
@@ -104,7 +104,7 @@ class MainActivity : Activity(), LocationListener {
             val folder = File(filesDir, "demo_surveys").apply { mkdirs() }
             demoFile = File(folder, "DEMO_${System.currentTimeMillis()}.csv")
             demoWriter = demoFile!!.bufferedWriter()
-            demoWriter!!.write("event_utc_ms,latitude_deg,longitude_deg,simulated_depth_m,source,usage\\n")
+            demoWriter!!.write("event_utc_ms,latitude_deg,longitude_deg,simulated_depth_m,source,usage\n")
             demoWriter!!.flush()
             demoCount = 0
             demoRecording = true
@@ -345,10 +345,9 @@ class MainActivity : Activity(), LocationListener {
         }
         setupNext.isEnabled = false
         captureCard.addView(setupNext)
-        captureCard.addView(heading("Recording stays locked until real depth, offsets and synchronization are verified.", 13f, muted))
+        captureCard.addView(heading("LIVE: Recording requires verified depth, offsets and synchronization. DEMO: Synthetic observations only.", 13f, muted))
         val reviewCard = section("SESSIONS & REVIEW", "Inspect observations after recovery")
         reviewCard.addView(action("Saved surveys and points") { if (demoMode) showDemoReview() else showSavedSurveys() })
-        reviewCard.addView(action("Open survey map") { if (demoMode) showDemoReview() else showSurveyMap() })
         reviewCard.addView(action("Export latest CSV") {
             if (demoMode) {
                 val file = File(filesDir, "demo_surveys").listFiles { f -> f.isFile && f.extension == "csv" }?.maxByOrNull { it.lastModified() }
@@ -364,6 +363,7 @@ class MainActivity : Activity(), LocationListener {
                 android.view.View.GONE else android.view.View.VISIBLE
         })
         val testCard = section("DEVELOPMENT ONLY", "Synthetic soundings are never survey observations")
+        testCard.visibility = android.view.View.GONE
         simulationStatus = heading("Simulation stopped", 14f, muted)
         testCard.addView(simulationStatus)
         testCard.addView(action("Start simulated depth test") { startSimulation() })
@@ -377,6 +377,10 @@ class MainActivity : Activity(), LocationListener {
         demoRecordButton = setupNext
         demoStatus = heading("DEMO ONLY  •  Synthetic observations never enter live surveys", 14f, muted)
         wizard.addView(demoStatus)
+        demoStatus.visibility = android.view.View.GONE
+        toolsCard.addView(action("Developer diagnostics") {
+            testCard.visibility = if (testCard.visibility == android.view.View.VISIBLE) android.view.View.GONE else android.view.View.VISIBLE
+        })
         updateDemoUi()
         legacyPanel = layout
         legacyPanel.visibility = android.view.View.GONE
@@ -613,6 +617,7 @@ class MainActivity : Activity(), LocationListener {
             "\nHydroLite depth unavailable" +
             "\nSynchronized capture not implemented"
         sounderStatus.text = "Disconnected • Depth unavailable"
+        if (demoMode) updateDemoUi()
         val rp = getSharedPreferences("rtk_status", MODE_PRIVATE)
         val rtkAge = (System.currentTimeMillis() - rp.getLong("last_fix_ms", 0L)) / 1000
         val quality = rp.getString("quality", "?") ?: "?"
