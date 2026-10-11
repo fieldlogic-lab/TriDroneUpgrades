@@ -22,7 +22,7 @@ class MainActivity : Activity(), LocationListener {
     private var demoSounder = false
     private var demoRecording = false
     private var demoCount = 0
-    private var demoWriter: java.io.BufferedWriter? = null
+    private val demoRecorder by lazy { DemoSessionRecorder(this) }
     private var demoFile: File? = null
     private lateinit var modeLabel: TextView
     private lateinit var demoGnssButton: Button
@@ -38,16 +38,9 @@ class MainActivity : Activity(), LocationListener {
     private val demoTick = object : Runnable {
         override fun run() {
             if (!demoRecording || !demoMode) return
-            val t = System.currentTimeMillis()
-            val lat = 40.8000 + demoCount * 0.000002
-            val lon = -73.0500 + kotlin.math.sin(demoCount * 0.08) * 0.00005
-            val depth = 2.5 + kotlin.math.sin(demoCount * 0.12) * 0.4
             try {
-                demoWriter?.write(String.format(Locale.US,
-                    "%d,%.9f,%.9f,%.3f,DEMO_SYNTHETIC,NOT_FOR_SURVEY\n",
-                    t, lat, lon, depth))
-                demoWriter?.flush()
-                demoCount++
+                demoRecorder.sample()
+                demoCount = demoRecorder.count
                 updateDemoUi()
                 handler.postDelayed(this, 1000)
             } catch (e: Exception) {
@@ -59,8 +52,7 @@ class MainActivity : Activity(), LocationListener {
     private fun stopDemoRecording() {
         demoRecording = false
         handler.removeCallbacks(demoTick)
-        try { demoWriter?.close() } catch (_: Exception) {}
-        demoWriter = null
+        try { demoRecorder.stop() } catch (_: Exception) {}
         if (::demoStatus.isInitialized) updateDemoUi()
     }
     private fun updateDemoUi() {
@@ -113,11 +105,7 @@ class MainActivity : Activity(), LocationListener {
     private fun startDemoRecording() {
         if (!demoMode || !demoGnss || !demoSounder || demoRecording) return
         try {
-            val folder = File(filesDir, "demo_surveys").apply { mkdirs() }
-            demoFile = File(folder, "DEMO_${System.currentTimeMillis()}.csv")
-            demoWriter = demoFile!!.bufferedWriter()
-            demoWriter!!.write("event_utc_ms,latitude_deg,longitude_deg,simulated_depth_m,source,usage\n")
-            demoWriter!!.flush()
+            demoFile = demoRecorder.start()
             demoCount = 0
             demoRecording = true
             updateDemoUi()
