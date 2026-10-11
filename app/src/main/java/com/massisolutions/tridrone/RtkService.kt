@@ -201,7 +201,7 @@ class WifiRtkService : Service() {
                 SurveyConfig.writeSnapshot(this, "wifi_rtk_$session")
                 BufferedWriter(FileWriter(File(folder, "wifi_nmea_$session.csv"))).use { raw ->
                     BufferedWriter(FileWriter(File(folder, "wifi_fixes_$session.csv"))).use { output ->
-                        raw.write("received_utc_ms,nmea_sentence\\n")
+                        raw.write("received_utc_ms,nmea_sentence\n")
                         output.write(RtkCoordinateExport.header)
                         while (running.get()) {
                             try {
@@ -220,7 +220,7 @@ class WifiRtkService : Service() {
                                         val sentence = reader.readLine() ?: throw java.io.EOFException("NMEA stream closed")
                                         if (sentence.length > 256 || !sentence.startsWith("$") || !NmeaGga.valid(sentence)) continue
                                         val received = System.currentTimeMillis()
-                                        raw.write("$received,${sentence.replace(",", "\\,")}\\n")
+                                        raw.write("$received,${sentence.replace(",", "\\,")}\n")
                                         raw.flush()
                                         count++
                                         NmeaGst.parse(sentence)?.let { gst ->
@@ -228,7 +228,7 @@ class WifiRtkService : Service() {
                                                 .putString("v_sigma_m", gst.second.toString())
                                                 .putLong("gst_received_ms", received).apply()
                                         }
-                                        NmeaGnssAdapter.parseGga(sentence, received)?.let { observation ->
+                                        NmeaGnssAdapter.parseGga(sentence, received)?.let { _ ->
                                             val fix = NmeaGga.parse(sentence) ?: return@let
                                             fixes++
                                             output.write(RtkCoordinateExport.row(received, fix, SurveyConfig.load(this)))
