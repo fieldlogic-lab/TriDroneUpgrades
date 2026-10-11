@@ -18,6 +18,8 @@ class SessionRepositoryTest {
                 "utc_epoch_ms,elapsed_realtime_ns,latitude_deg,longitude_deg,horizontal_accuracy_m,altitude_m,vertical_accuracy_m,speed_mps,bearing_deg,provider\n" +
                 "123,456,40.8,-73.05,1.0,,,,,gps\n"
             )
+            live.resolve("rtk_nmea_1.csv").writeText("received_utc_ms,nmea_sentence\\n")
+            live.resolve("rtk_fixes_1.csv").writeText("different,schema\\n")
             val repo = SessionRepository(root)
             assertEquals(1, repo.list(SessionRepository.Kind.DEMO).size)
             assertEquals(1, repo.list(SessionRepository.Kind.LIVE).size)
