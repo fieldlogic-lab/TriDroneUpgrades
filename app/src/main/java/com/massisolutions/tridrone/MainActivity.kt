@@ -168,70 +168,83 @@ class MainActivity : Activity(), LocationListener {
 
 
         layout.addView(label("EPSG:6539 export is provisional pending datum and control verification. Phone GPS is not survey-grade.", 13f))
+        // Field console: single clear workflow with diagnostics kept out of the primary view.
+        val navy = Color.rgb(12, 24, 39)
+        val panel = Color.rgb(24, 40, 58)
+        val muted = Color.rgb(165, 185, 201)
+        val cyan = Color.rgb(89, 208, 228)
         val wizard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(32, 36, 32, 30)
+            setPadding(24, 28, 24, 24)
+            setBackgroundColor(navy)
         }
-        fun heading(value: String, size: Float) = TextView(this).apply {
-            text = value; textSize = size; setPadding(0, 12, 0, 12)
+        fun heading(value: String, size: Float, color: Int = Color.WHITE) = TextView(this).apply {
+            text = value
+            textSize = size
+            setTextColor(color)
+            setPadding(8, 12, 8, 12)
         }
-        wizard.addView(heading("TRIDRONE  |  FIELD SETUP", 23f).apply { setTypeface(null, Typeface.BOLD) })
-        wizard.addView(heading("1  CONNECT GPS STREAM", 19f))
-        setupStatus = heading("Waiting for receiver", 16f)
-        wizard.addView(setupStatus)
-        wizard.addView(Button(this).apply {
-            text = "CONNECT EMLID OVER WI-FI"
-            setOnClickListener { showWifiRtkSetup() }
-        })
-        wizard.addView(Button(this).apply {
-            text = "BLUETOOTH GPS (BACKUP)"
-            setOnClickListener { connectRtk() }
-        })
+        fun section(title: String, subtitle: String): LinearLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16, 14, 16, 16)
+            setBackgroundColor(panel)
+            addView(heading(title, 19f).apply { setTypeface(null, Typeface.BOLD) })
+            addView(heading(subtitle, 13f, muted))
+            val params = LinearLayout.LayoutParams(-1, -2)
+            params.bottomMargin = 16
+            wizard.addView(this, params)
+        }
+        fun action(title: String, click: () -> Unit): Button = Button(this).apply {
+            text = title
+            isAllCaps = false
+            textSize = 15f
+            setOnClickListener { click() }
+        }
+        wizard.addView(heading("TRIDRONE  /  HYDRO", 25f, cyan).apply { setTypeface(null, Typeface.BOLD) })
+        wizard.addView(heading("FIELD CONSOLE   •   OFFLINE LOGGER", 12f, muted))
+        wizard.addView(heading("Equipment readiness", 21f).apply { setTypeface(null, Typeface.BOLD) })
+        val gnssCard = section("01   GNSS RECEIVER", "Reach RS2+  /  Wi-Fi NMEA preferred")
+        setupStatus = heading("Waiting for receiver", 15f, muted)
+        gnssCard.addView(setupStatus)
+        gnssCard.addView(action("Connect Emlid via Wi-Fi") { showWifiRtkSetup() })
+        gnssCard.addView(action("Bluetooth backup") { connectRtk() })
+        val sounderCard = section("02   DEPTH SOUNDER", "HydroLite Plus  /  hardware verification pending")
         setupSounder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        setupSounder.addView(heading("2  CONNECT SOUNDING STREAM", 19f))
-        setupSounder.addView(heading("HydroLite Plus — protocol integration pending. No simulated depths.", 15f))
-        setupSounder.addView(Button(this).apply {
-            text = "CONNECT HYDROLITE PLUS"
-            setOnClickListener {
-                android.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Sounder integration")
-                    .setMessage("The HydroLite Bluetooth transport and depth messages must be verified before this control can connect. GNSS can be tested now.")
-                    .setPositiveButton("OK", null).show()
-            }
+        setupSounder.addView(heading("No verified depth stream", 14f, muted))
+        setupSounder.addView(action("Sounder connection details") {
+            android.app.AlertDialog.Builder(this@MainActivity)
+                .setTitle("HydroLite Plus")
+                .setMessage("Bluetooth transport and depth message protocol must be verified against the actual instrument. Live depth connection is not yet implemented.")
+                .setPositiveButton("OK", null).show()
         })
-        wizard.addView(setupSounder)
-        wizard.addView(Button(this).apply {
-            text = "OPEN LIVE GNSS MAP"
-            setOnClickListener { showLiveRtkMap() }
+        sounderCard.addView(setupSounder)
+        val captureCard = section("03   SURVEY COLLECTION", "Continuous GNSS + depth logging")
+        setupNext = action("Recording unavailable — setup incomplete") {}
+        setupNext.isEnabled = false
+        captureCard.addView(setupNext)
+        captureCard.addView(heading("Recording stays locked until real depth, offsets and synchronization are verified.", 13f, muted))
+        val reviewCard = section("SESSIONS & REVIEW", "Inspect observations after recovery")
+        reviewCard.addView(action("Saved surveys and points") { showSavedSurveys() })
+        reviewCard.addView(action("Open survey map") { showSurveyMap() })
+        reviewCard.addView(action("Export latest CSV") { exportLatest() })
+        val toolsCard = section("SETTINGS & DIAGNOSTICS", "Advanced tools, configuration and tests")
+        toolsCard.addView(action("Survey settings / coordinate systems") { showSurveySettings() })
+        toolsCard.addView(action("Check for app updates") { AppUpdater.open(this@MainActivity) })
+        toolsCard.addView(action("Live GNSS diagnostic map") { showLiveRtkMap() })
+        toolsCard.addView(action("Phone GPS test tools") {
+            legacyPanel.visibility = if (legacyPanel.visibility == android.view.View.VISIBLE)
+                android.view.View.GONE else android.view.View.VISIBLE
         })
-        wizard.addView(heading("3  CONTINUOUS HYDROGRAPHIC COLLECTION", 19f))
-        setupNext = Button(this).apply {
-            text = "START RECORDING — WAITING FOR VALID STREAMS"
-            isEnabled = false
-        }
-        wizard.addView(setupNext)
-        wizard.addView(heading("Sounder-driven, timestamped continuous recording will unlock only after both streams and offsets are validated.", 14f))
-        wizard.addView(heading("DEVELOPMENT TEST — SIMULATED SOUNDER", 17f).apply { setTypeface(null, Typeface.BOLD) })
-        wizard.addView(heading("Synthetic depths are generated once per second and paired with the latest live Emlid GGA. TEST DATA ONLY: no sounder, offset correction, vertical datum, or validated synchronization.", 13f))
-        simulationStatus = heading("Simulation stopped", 15f)
-        wizard.addView(simulationStatus)
-        wizard.addView(Button(this).apply { text = "START SIMULATED DEPTH RECORDING"; setOnClickListener { startSimulation() } })
-        wizard.addView(Button(this).apply { text = "STOP SIMULATION"; setOnClickListener { stopSimulation() } })
-        wizard.addView(Button(this).apply { text = "EXPORT SIMULATION CSV"; setOnClickListener {
+        val testCard = section("DEVELOPMENT ONLY", "Synthetic soundings are never survey observations")
+        simulationStatus = heading("Simulation stopped", 14f, muted)
+        testCard.addView(simulationStatus)
+        testCard.addView(action("Start simulated depth test") { startSimulation() })
+        testCard.addView(action("Stop simulation") { stopSimulation() })
+        testCard.addView(action("Export simulation CSV") {
             val file = simulationFile
-            if (file == null || !file.exists()) Toast.makeText(this@MainActivity, "No simulation file yet", Toast.LENGTH_SHORT).show()
+            if (file == null || !file.exists())
+                Toast.makeText(this@MainActivity, "No simulation file yet", Toast.LENGTH_SHORT).show()
             else exportFile(file)
-        } })
-        wizard.addView(Button(this).apply {
-            text = "CHECK FOR APP UPDATES"
-            setOnClickListener { AppUpdater.open(this@MainActivity) }
-        })
-        wizard.addView(Button(this).apply {
-            text = "DIAGNOSTICS / PHONE GPS TEST LOGGER"
-            setOnClickListener {
-                legacyPanel.visibility = if (legacyPanel.visibility == android.view.View.VISIBLE)
-                    android.view.View.GONE else android.view.View.VISIBLE
-            }
         })
         legacyPanel = layout
         legacyPanel.visibility = android.view.View.GONE
