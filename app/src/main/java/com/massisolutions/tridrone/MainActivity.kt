@@ -301,7 +301,7 @@ class MainActivity : Activity(), LocationListener {
         }
         wizard.addView(heading("TRIDRONE  /  HYDRO", 25f, cyan).apply { setTypeface(null, Typeface.BOLD) })
         wizard.addView(heading("FIELD CONSOLE   •   OFFLINE LOGGER", 12f, muted))
-        wizard.addView(heading("Equipment readiness", 21f).apply { setTypeface(null, Typeface.BOLD) })
+        wizard.addView(heading("Survey workspace", 21f).apply { setTypeface(null, Typeface.BOLD) })
         modeLabel = heading("LIVE SURVEY  •  REAL HARDWARE", 15f, cyan)
         wizard.addView(modeLabel)
         val modeSwitch = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -312,8 +312,7 @@ class MainActivity : Activity(), LocationListener {
         wizard.addView(modeSwitch)
         liveCards = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         demoCards = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
-        wizard.addView(liveCards)
-        wizard.addView(demoCards)
+        // Destination sections are mounted into the tab host below.
         val gnssCard = section("01   GNSS RECEIVER", "Reach RS2+  /  Wi-Fi NMEA preferred")
         setupStatus = heading("Waiting for receiver", 15f, muted)
         gnssCard.addView(setupStatus)
@@ -381,9 +380,82 @@ class MainActivity : Activity(), LocationListener {
         })
         updateDemoUi()
         legacyPanel = layout
-        // Retain initialized legacy diagnostic fields without attaching the obsolete screen.
-        root.addView(wizard)
-        setContentView(root)
+        // Keep the original diagnostic widgets initialized but off-screen.
+        // A single navigation host owns all visible destinations.
+        val navHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(navy) }
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 20, 24, 12)
+            setBackgroundColor(navy)
+        }
+        top.addView(heading("TRIDRONE", 25f, Color.WHITE).apply { setTypeface(null, Typeface.BOLD) })
+        top.addView(heading("HYDROGRAPHIC FIELD SYSTEM", 12f, muted))
+        val tabBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setBackgroundColor(panel) }
+        val pages = listOf("Survey", "Sessions", "Equipment", "Settings")
+        val tabButtons = mutableListOf<Button>()
+        val pageScroll = ScrollView(this).apply { isFillViewport = true }
+        val pageHost = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(20, 20, 20, 28)
+        }
+        pageScroll.addView(pageHost)
+        val surveyPage = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val sessionsPage = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val equipmentPage = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val settingsPage = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val destinations = listOf(surveyPage, sessionsPage, equipmentPage, settingsPage)
+        fun selectPage(index: Int) {
+            pageHost.removeAllViews()
+            val selected = destinations[index]
+            (selected.parent as? android.view.ViewGroup)?.removeView(selected)
+            pageHost.addView(selected)
+            pageScroll.scrollTo(0, 0)
+            tabButtons.forEachIndexed { i, button ->
+                button.setTextColor(if (i == index) cyan else muted)
+                button.setBackgroundColor(if (i == index) navy else panel)
+            }
+        }
+        pages.forEachIndexed { index, name ->
+            val tab = Button(this).apply {
+                text = name
+                isAllCaps = false
+                textSize = 12f
+                minWidth = 0
+                minimumWidth = 0
+                setPadding(0, 8, 0, 8)
+                setOnClickListener { selectPage(index) }
+            }
+            tabButtons.add(tab)
+            tabBar.addView(tab, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        surveyPage.addView(heading("Ready to collect?", 22f).apply { setTypeface(null, Typeface.BOLD) })
+        surveyPage.addView(heading("Connect both sensors before recording. Live survey collection remains locked until hardware validation.", 14f, muted))
+        (modeLabel.parent as? android.view.ViewGroup)?.removeView(modeLabel)
+        surveyPage.addView(modeLabel)
+        (modeSwitch.parent as? android.view.ViewGroup)?.removeView(modeSwitch)
+        surveyPage.addView(modeSwitch)
+        (captureCard.parent as? android.view.ViewGroup)?.removeView(captureCard)
+        surveyPage.addView(captureCard)
+        (demoStatus.parent as? android.view.ViewGroup)?.removeView(demoStatus)
+        surveyPage.addView(demoStatus)
+        sessionsPage.addView(heading("Sessions", 22f))
+        (reviewCard.parent as? android.view.ViewGroup)?.removeView(reviewCard)
+        sessionsPage.addView(reviewCard)
+        equipmentPage.addView(heading("Equipment", 22f))
+        (gnssCard.parent as? android.view.ViewGroup)?.removeView(gnssCard)
+        equipmentPage.addView(gnssCard)
+        (sounderCard.parent as? android.view.ViewGroup)?.removeView(sounderCard)
+        equipmentPage.addView(sounderCard)
+        settingsPage.addView(heading("Preferences & tools", 22f))
+        (toolsCard.parent as? android.view.ViewGroup)?.removeView(toolsCard)
+        settingsPage.addView(toolsCard)
+        (testCard.parent as? android.view.ViewGroup)?.removeView(testCard)
+        settingsPage.addView(testCard)
+        navHost.addView(top)
+        navHost.addView(tabBar)
+        navHost.addView(pageScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        selectPage(0)
+        setContentView(navHost)
     }
     override fun onResume() {
         super.onResume()
