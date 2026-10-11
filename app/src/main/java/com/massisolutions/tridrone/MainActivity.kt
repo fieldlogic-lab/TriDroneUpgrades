@@ -17,6 +17,90 @@ import android.location.LocationListener
 import android.location.LocationManager
 
 class MainActivity : Activity(), LocationListener {
+    private var demoMode = false
+    private var demoGnss = false
+    private var demoSounder = false
+    private var demoRecording = false
+    private var demoCount = 0
+    private var demoWriter: java.io.BufferedWriter? = null
+    private var demoFile: File? = null
+    private lateinit var modeLabel: TextView
+    private lateinit var demoGnssButton: Button
+    private lateinit var demoSounderButton: Button
+    private lateinit var demoRecordButton: Button
+    private lateinit var demoStatus: TextView
+    private lateinit var liveCards: LinearLayout
+    private lateinit var demoCards: LinearLayout
+    private val demoTick = object : Runnable {
+        override fun run() {
+            if (!demoRecording || !demoMode) return
+            val t = System.currentTimeMillis()
+            val lat = 40.8000 + demoCount * 0.000002
+            val lon = -73.0500 + kotlin.math.sin(demoCount * 0.08) * 0.00005
+            val depth = 2.5 + kotlin.math.sin(demoCount * 0.12) * 0.4
+            try {
+                demoWriter?.write(String.format(Locale.US,
+                    "%d,%.9f,%.9f,%.3f,DEMO_SYNTHETIC,NOT_FOR_SURVEY\\n",
+                    t, lat, lon, depth))
+                demoWriter?.flush()
+                demoCount++
+                updateDemoUi()
+                handler.postDelayed(this, 1000)
+            } catch (e: Exception) {
+                stopDemoRecording()
+                Toast.makeText(this@MainActivity, "Demo write failed: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    private fun stopDemoRecording() {
+        demoRecording = false
+        handler.removeCallbacks(demoTick)
+        try { demoWriter?.close() } catch (_: Exception) {}
+        demoWriter = null
+        if (::demoStatus.isInitialized) updateDemoUi()
+    }
+    private fun updateDemoUi() {
+        if (!::demoStatus.isInitialized) return
+        demoGnssButton.text = if (demoGnss) "GNSS connected (simulated)" else "Connect demo GNSS"
+        demoSounderButton.text = if (demoSounder) "Sounder connected (simulated)" else "Connect demo sounder"
+        demoSounderButton.isEnabled = demoGnss && !demoRecording
+        demoGnssButton.isEnabled = !demoRecording
+        demoRecordButton.isEnabled = demoGnss && demoSounder
+        demoRecordButton.text = if (demoRecording) "Stop demo recording" else "Start demo recording"
+        demoStatus.text = "DEMO ONLY  •  ${demoCount} synthetic observations\\n" +
+            "GNSS: ${if (demoGnss) "SIMULATED FIX" else "NOT CONNECTED"}  •  " +
+            "Depth: ${if (demoSounder) "SIMULATED" else "NOT CONNECTED"}"
+    }
+    private fun setDemoMode(enabled: Boolean) {
+        if (demoMode == enabled) return
+        stopDemoRecording()
+        stopSimulation()
+        demoMode = enabled
+        demoGnss = false
+        demoSounder = false
+        demoCount = 0
+        liveCards.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
+        demoCards.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
+        modeLabel.text = if (enabled) "DEMO MODE  •  SYNTHETIC DATA" else "LIVE SURVEY  •  REAL HARDWARE"
+        updateDemoUi()
+    }
+    private fun startDemoRecording() {
+        if (!demoMode || !demoGnss || !demoSounder || demoRecording) return
+        try {
+            val folder = File(filesDir, "demo_surveys").apply { mkdirs() }
+            demoFile = File(folder, "DEMO_${System.currentTimeMillis()}.csv")
+            demoWriter = demoFile!!.bufferedWriter()
+            demoWriter!!.write("event_utc_ms,latitude_deg,longitude_deg,simulated_depth_m,source,usage\\n")
+            demoWriter!!.flush()
+            demoCount = 0
+            demoRecording = true
+            updateDemoUi()
+            handler.post(demoTick)
+        } catch (e: Exception) {
+            stopDemoRecording()
+            Toast.makeText(this, "Cannot start demo: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
     private var simulationActive = false
     private var simulationWriter: java.io.BufferedWriter? = null
     private var simulationFile: File? = null
@@ -192,7 +276,7 @@ class MainActivity : Activity(), LocationListener {
             addView(heading(subtitle, 13f, muted))
             val params = LinearLayout.LayoutParams(-1, -2)
             params.bottomMargin = 16
-            wizard.addView(this, params)
+            (if (::liveCards.isInitialized) liveCards else wizard).addView(this, params)
         }
         fun action(title: String, click: () -> Unit): Button = Button(this).apply {
             text = title
@@ -203,6 +287,18 @@ class MainActivity : Activity(), LocationListener {
         wizard.addView(heading("TRIDRONE  /  HYDRO", 25f, cyan).apply { setTypeface(null, Typeface.BOLD) })
         wizard.addView(heading("FIELD CONSOLE   •   OFFLINE LOGGER", 12f, muted))
         wizard.addView(heading("Equipment readiness", 21f).apply { setTypeface(null, Typeface.BOLD) })
+        modeLabel = heading("LIVE SURVEY  •  REAL HARDWARE", 15f, cyan)
+        wizard.addView(modeLabel)
+        val modeSwitch = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val liveButton = action("LIVE") { setDemoMode(false) }
+        val demoButton = action("DEMO") { setDemoMode(true) }
+        modeSwitch.addView(liveButton, LinearLayout.LayoutParams(0, -2, 1f))
+        modeSwitch.addView(demoButton, LinearLayout.LayoutParams(0, -2, 1f))
+        wizard.addView(modeSwitch)
+        liveCards = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        demoCards = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
+        wizard.addView(liveCards)
+        wizard.addView(demoCards)
         val gnssCard = section("01   GNSS RECEIVER", "Reach RS2+  /  Wi-Fi NMEA preferred")
         setupStatus = heading("Waiting for receiver", 15f, muted)
         gnssCard.addView(setupStatus)
@@ -246,6 +342,32 @@ class MainActivity : Activity(), LocationListener {
                 Toast.makeText(this@MainActivity, "No simulation file yet", Toast.LENGTH_SHORT).show()
             else exportFile(file)
         })
+        val demoTitle = heading("TRAINING / DEMO", 20f, cyan)
+        demoCards.addView(demoTitle)
+        demoCards.addView(heading("Simulated receivers; no Bluetooth, Wi-Fi or live survey services are used.", 14f, muted))
+        demoGnssButton = action("Connect demo GNSS") {
+            demoGnss = true
+            updateDemoUi()
+        }
+        demoCards.addView(demoGnssButton)
+        demoSounderButton = action("Connect demo sounder") {
+            if (demoGnss) demoSounder = true
+            updateDemoUi()
+        }
+        demoCards.addView(demoSounderButton)
+        demoRecordButton = action("Start demo recording") {
+            if (demoRecording) stopDemoRecording() else startDemoRecording()
+            updateDemoUi()
+        }
+        demoCards.addView(demoRecordButton)
+        demoStatus = heading("DEMO ONLY", 15f, muted)
+        demoCards.addView(demoStatus)
+        demoCards.addView(action("Export latest demo CSV") {
+            val file = demoFile
+            if (file != null && file.exists()) exportFile(file)
+            else Toast.makeText(this@MainActivity, "No demo session yet", Toast.LENGTH_SHORT).show()
+        })
+        updateDemoUi()
         legacyPanel = layout
         legacyPanel.visibility = android.view.View.GONE
         val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -336,6 +458,7 @@ class MainActivity : Activity(), LocationListener {
     }
     override fun onDestroy() {
         stopSimulation()
+        stopDemoRecording()
         handler.removeCallbacks(refresh)
         super.onDestroy()
     }
