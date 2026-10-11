@@ -328,12 +328,7 @@ class MainActivity : Activity(), LocationListener {
         val sounderCard = section("02   DEPTH SOUNDER", "HydroLite Plus  /  hardware verification pending")
         setupSounder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         setupSounder.addView(heading("No verified depth stream", 14f, muted))
-        setupSounder.addView(action("Sounder connection details") {
-            android.app.AlertDialog.Builder(this@MainActivity)
-                .setTitle("HydroLite Plus")
-                .setMessage("Bluetooth transport and depth message protocol must be verified against the actual instrument. Live depth connection is not yet implemented.")
-                .setPositiveButton("OK", null).show()
-        })
+        setupSounder.addView(action("Sounder diagnostics • connect / inspect") { showSounderDiagnostics() })
         liveSounderActions = setupSounder
         sounderCard.addView(liveSounderActions)
         demoSounderActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
@@ -562,6 +557,97 @@ class MainActivity : Activity(), LocationListener {
                 }
             }.show()
     }
+    private fun showSounderDiagnostics() {
+        if (demoMode) {
+            Toast.makeText(this, "Sounder diagnostics are available in Live mode only", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 31 &&
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 43)
+            return
+        }
+        val prefs = getSharedPreferences("sounder_diagnostics", MODE_PRIVATE)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 20, 24, 12)
+        }
+        val info = TextView(this).apply { textSize = 14f; setTextIsSelectable(true) }
+        panel.addView(info)
+        val connect = Button(this).apply { text = "Connect paired sounder" }
+        val stop = Button(this).apply { text = "Stop diagnostic capture" }
+        val share = Button(this).apply { text = "Share raw capture" }
+        panel.addView(connect)
+        panel.addView(stop)
+        panel.addView(share)
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("HydroLite • raw diagnostics")
+            .setView(panel).setPositiveButton("Close", null).create()
+        val tick = object : Runnable {
+            override fun run() {
+                if (!dialog.isShowing) return
+                info.text = "State: ${prefs.getString("state", "disconnected")}\n" +
+                    "Detail: ${prefs.getString("detail", "")}\n" +
+                    "Bytes: ${prefs.getLong("bytes", 0L)}\n" +
+                    "ASCII frames: ${prefs.getInt("frames", 0)}\n" +
+                    "Last ASCII frame: ${prefs.getString("preview", "—")}\n" +
+                    "Depth: NOT VERIFIED • not recording survey observations"
+                handler.postDelayed(this, 1000)
+            }
+        }
+        connect.setOnClickListener {
+            try {
+                val manager = getSystemService(BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager
+                val adapter = manager.adapter
+                if (adapter == null || !adapter.isEnabled) {
+                    Toast.makeText(this, "Enable Bluetooth and pair the sounder first", Toast.LENGTH_LONG).show()
+                } else {
+                    val devices = adapter.bondedDevices.toList().sortedBy { it.name ?: it.address }
+                    if (devices.isEmpty()) {
+                        Toast.makeText(this, "No paired Bluetooth devices", Toast.LENGTH_LONG).show()
+                    } else {
+                        val labels = devices.map { "${it.name ?: "Unknown"} (${it.address})" }.toTypedArray()
+                        android.app.AlertDialog.Builder(this).setTitle("Select sounder Bluetooth device")
+                            .setItems(labels) { _, index ->
+                                stopService(Intent(this, SounderDiagnosticService::class.java))
+                                startForegroundService(Intent(this, SounderDiagnosticService::class.java)
+                                    .putExtra("address", devices[index].address))
+                            }.setNegativeButton("Cancel", null).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Toast.makeText(this, "Bluetooth error: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+        stop.setOnClickListener {
+            stopService(Intent(this, SounderDiagnosticService::class.java))
+        }
+        share.setOnClickListener {
+            val path = prefs.getString("file", null)
+            val file = path?.let { File(it) }
+            val directory = File(filesDir, "sounder_diagnostics").canonicalFile
+            if (file == null || !file.isFile || file.parentFile?.canonicalFile != directory) {
+                Toast.makeText(this, "No raw capture available", Toast.LENGTH_LONG).show()
+            } else {
+                try {
+                    val copy = File(cacheDir, "sounder_capture.bin")
+                    file.copyTo(copy, overwrite = true)
+                    val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", copy)
+                    startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                        type = "application/octet-stream"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }, "Share raw sounder capture"))
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Cannot share capture: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        dialog.setOnShowListener { handler.post(tick) }
+        dialog.setOnDismissListener { handler.removeCallbacks(tick) }
+        dialog.show()
+    }
+
     private fun connectRtk() {
         if (Build.VERSION.SDK_INT >= 31 &&
             checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
