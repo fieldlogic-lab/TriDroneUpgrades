@@ -772,25 +772,17 @@ class MainActivity : Activity(), LocationListener {
     }
 
     private fun showSurveyMap() {
-        val files = File(filesDir, "surveys").listFiles { f -> f.isFile && f.extension == "csv" }
-            ?.sortedByDescending { it.lastModified() } ?: emptyList()
-        val tracks = files.map { file ->
+        val sessions = sessionsRepository.list(SessionRepository.Kind.LIVE)
+        val tracks = sessions.map { session ->
             try {
-                file.useLines { lines ->
-                    lines.drop(1).mapNotNull { line ->
-                        val cells = line.split(",")
-                        val lat = cells.getOrNull(2)?.toDoubleOrNull()
-                        val lon = cells.getOrNull(3)?.toDoubleOrNull()
-                        if (lat != null && lon != null && lat in -90.0..90.0 && lon in -180.0..180.0) Pair(lat, lon) else null
-                    }.toList()
-                }
+                sessionsRepository.read(session).map { Pair(it.latitude, it.longitude) }
             } catch (_: Exception) { emptyList<Pair<Double, Double>>() }
         }
         val view = SurveyMapView(this)
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val info = TextView(this).apply {
-            text = "All saved tracks: " + files.size + "  |  Recorded points: " + tracks.sumOf { it.size } +
-                "\\nBlue: latest track  •  Gray: earlier tracks  •  Green: live position"
+            text = "All saved tracks: " + sessions.size + "  |  Recorded points: " + tracks.sumOf { it.size } +
+                "\nBlue: latest track  •  Gray: earlier tracks  •  Green: phone GPS position"
             textSize = 14f
             setPadding(20, 16, 20, 12)
         }
@@ -805,7 +797,7 @@ class MainActivity : Activity(), LocationListener {
             view.current = if (lat != null && lon != null && age in 0..10000) Pair(lat, lon) else null
         }
         refreshMap()
-        val dialog = android.app.AlertDialog.Builder(this).setTitle("Survey map")
+        val dialog = android.app.AlertDialog.Builder(this).setTitle("Phone GPS diagnostic map")
             .setView(box).setPositiveButton("Close", null).create()
         val ticker = object : Runnable {
             override fun run() {
@@ -820,44 +812,35 @@ class MainActivity : Activity(), LocationListener {
         dialog.show()
     }
     private fun showSavedSurveys() {
-        val files = File(filesDir, "surveys").listFiles { f -> f.isFile && f.extension == "csv" }
-            ?.sortedByDescending { it.lastModified() } ?: emptyList()
-        if (files.isEmpty()) {
-            Toast.makeText(this, "No saved surveys", Toast.LENGTH_LONG).show()
+        val sessions = sessionsRepository.list(SessionRepository.Kind.LIVE)
+        if (sessions.isEmpty()) {
+            Toast.makeText(this, "No saved phone GPS sessions", Toast.LENGTH_LONG).show()
             return
         }
-        val labels = files.map { file ->
-            val count = try { file.useLines { it.count() - 1 }.coerceAtLeast(0) } catch (_: Exception) { 0 }
-            file.name + "  |  " + count + " points"
-        }.toTypedArray()
-        android.app.AlertDialog.Builder(this).setTitle("Saved surveys")
-            .setItems(labels) { _, index -> showSavedPoints(files[index]) }
+        val labels = sessions.map { "${it.file.name}  |  ${it.observations} points" }.toTypedArray()
+        android.app.AlertDialog.Builder(this).setTitle("Phone GPS diagnostic sessions")
+            .setItems(labels) { _, index -> showSavedPoints(sessions[index]) }
             .setNegativeButton("Close", null).show()
     }
-    private fun showSavedPoints(file: File) {
+    private fun showSavedPoints(session: SessionRepository.Session) {
         try {
-            val lines = file.readLines()
-            val body = lines.drop(1).mapIndexed { i, row ->
-                val values = row.split(",")
-                val time = values.getOrNull(0)?.toLongOrNull()?.let {
-                    java.text.DateFormat.getTimeInstance().format(java.util.Date(it))
-                } ?: "unknown"
-                "#"+(i+1)+"  "+time+"\\nLat: "+(values.getOrNull(2) ?: "—")+
-                    "  Lon: "+(values.getOrNull(3) ?: "—")+
-                    "\\nAccuracy: "+(values.getOrNull(4) ?: "—")+" m"
-            }.joinToString("\\n\\n")
+            val points = sessionsRepository.read(session)
+            val body = points.take(200).mapIndexed { i, point ->
+                "#${i + 1}  Lat: ${point.latitude}  Lon: ${point.longitude}"
+            }.joinToString("\n")
             val view = ScrollView(this)
             view.addView(TextView(this).apply {
                 textSize = 15f
                 setPadding(28, 20, 28, 20)
-                text = file.name + "\\nRecorded observations: " + lines.drop(1).size + "\\n\\n" + body
+                text = session.file.name + "\nRecorded positions: ${points.size}\nPHONE GPS — NOT RTK OR BATHYMETRY\n\n" +
+                    body + if (points.size > 200) "\n…first 200 displayed" else ""
                 setTextIsSelectable(true)
             })
-            android.app.AlertDialog.Builder(this).setTitle("Recorded GPS points")
+            android.app.AlertDialog.Builder(this).setTitle("Recorded phone GPS positions")
                 .setView(view).setPositiveButton("Close", null)
-                .setNeutralButton("Export this survey") { _, _ -> exportFile(file) }.show()
+                .setNeutralButton("Export CSV") { _, _ -> exportFile(session.file) }.show()
         } catch (e: Exception) {
-            Toast.makeText(this, "Cannot open CSV: "+e.message, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Cannot open CSV: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
     private fun startSurvey() {
