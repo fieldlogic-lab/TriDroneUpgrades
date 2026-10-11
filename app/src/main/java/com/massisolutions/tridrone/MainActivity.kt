@@ -17,10 +17,11 @@ import android.location.LocationListener
 import android.location.LocationManager
 
 class MainActivity : Activity(), LocationListener {
-    private var demoMode = false
-    private var demoGnss = false
-    private var demoSounder = false
-    private var demoRecording = false
+    private val modeController = SurveyModeController()
+    private val demoMode get() = modeController.state.mode == SurveyModeController.Mode.DEMO
+    private val demoGnss get() = modeController.state.demoGnssConnected
+    private val demoSounder get() = modeController.state.demoSounderConnected
+    private val demoRecording get() = modeController.state.recording
     private var demoCount = 0
     private val demoRecorder by lazy { DemoSessionRecorder(this) }
     private var demoFile: File? = null
@@ -50,7 +51,7 @@ class MainActivity : Activity(), LocationListener {
         }
     }
     private fun stopDemoRecording() {
-        demoRecording = false
+        modeController.stopDemo()
         handler.removeCallbacks(demoTick)
         try { demoRecorder.stop() } catch (_: Exception) {}
         if (::demoStatus.isInitialized) updateDemoUi()
@@ -89,9 +90,7 @@ class MainActivity : Activity(), LocationListener {
     private fun switchMode(enabled: Boolean) {
         stopDemoRecording()
         stopSimulation()
-        demoMode = enabled
-        demoGnss = false
-        demoSounder = false
+        check(modeController.switchMode(if (enabled) SurveyModeController.Mode.DEMO else SurveyModeController.Mode.LIVE))
         demoCount = 0
         liveGnssActions.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
         demoGnssActions.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
@@ -107,7 +106,7 @@ class MainActivity : Activity(), LocationListener {
         try {
             demoFile = demoRecorder.start()
             demoCount = 0
-            demoRecording = true
+            check(modeController.startDemo())
             updateDemoUi()
             handler.post(demoTick)
         } catch (e: Exception) {
@@ -321,7 +320,7 @@ class MainActivity : Activity(), LocationListener {
         liveGnssActions.addView(action("Bluetooth backup") { connectRtk() })
         gnssCard.addView(liveGnssActions)
         demoGnssActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
-        demoGnssButton = action("Connect demo GNSS") { demoGnss = true; updateDemoUi() }
+        demoGnssButton = action("Connect demo GNSS") { modeController.connectDemoGnss(); updateDemoUi() }
         demoGnssActions.addView(demoGnssButton)
         gnssCard.addView(demoGnssActions)
         val sounderCard = section("02   DEPTH SOUNDER", "HydroLite Plus  /  hardware verification pending")
@@ -336,7 +335,7 @@ class MainActivity : Activity(), LocationListener {
         liveSounderActions = setupSounder
         sounderCard.addView(liveSounderActions)
         demoSounderActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
-        demoSounderButton = action("Connect demo sounder") { if (demoGnss) demoSounder = true; updateDemoUi() }
+        demoSounderButton = action("Connect demo sounder") { modeController.connectDemoSounder(); updateDemoUi() }
         demoSounderActions.addView(demoSounderButton)
         sounderCard.addView(demoSounderActions)
         val captureCard = section("03   SURVEY COLLECTION", "Continuous GNSS + depth logging")
