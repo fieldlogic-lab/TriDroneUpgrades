@@ -362,6 +362,7 @@ class MainActivity : Activity(), LocationListener {
         demoCards.addView(demoRecordButton)
         demoStatus = heading("DEMO ONLY", 15f, muted)
         demoCards.addView(demoStatus)
+        demoCards.addView(action("Review demo sessions / map") { showDemoReview() })
         demoCards.addView(action("Export latest demo CSV") {
             val file = demoFile
             if (file != null && file.exists()) exportFile(file)
@@ -705,6 +706,66 @@ class MainActivity : Activity(), LocationListener {
         dialog.setOnDismissListener { handler.removeCallbacks(ticker) }
         dialog.show()
     }
+    private fun showDemoReview() {
+        val files = File(filesDir, "demo_surveys").listFiles { f ->
+            f.isFile && f.extension.equals("csv", true)
+        }?.sortedByDescending { it.lastModified() } ?: emptyList()
+        if (files.isEmpty()) {
+            Toast.makeText(this, "No demo recordings yet. Start and stop a demo session first.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val labels = files.map { file ->
+            val count = try { file.useLines { it.drop(1).count() } } catch (_: Exception) { 0 }
+            "${file.name}  •  $count observations"
+        }.toTypedArray()
+        android.app.AlertDialog.Builder(this).setTitle("DEMO sessions — synthetic only")
+            .setItems(labels) { _, index -> showDemoSession(files[index]) }
+            .setNegativeButton("Close", null).show()
+    }
+
+    private fun showDemoSession(file: File) {
+        val samples = try {
+            file.useLines { lines ->
+                lines.drop(1).mapNotNull { line ->
+                    val c = line.split(",")
+                    val lat = c.getOrNull(1)?.toDoubleOrNull()
+                    val lon = c.getOrNull(2)?.toDoubleOrNull()
+                    val depth = c.getOrNull(3)?.toDoubleOrNull()
+                    if (lat != null && lon != null && depth != null &&
+                        lat in -90.0..90.0 && lon in -180.0..180.0)
+                        Triple(lat, lon, depth) else null
+                }.toList()
+            }
+        } catch (_: Exception) { emptyList<Triple<Double, Double, Double>>() }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(12, 12, 12, 12)
+        }
+        val minDepth = samples.minOfOrNull { it.third }
+        val maxDepth = samples.maxOfOrNull { it.third }
+        container.addView(TextView(this).apply {
+            text = "DEMO — SYNTHETIC DATA, NOT FOR SURVEY\\n" +
+                "Observations: ${samples.size}\\n" +
+                "Depth range: ${if (minDepth != null && maxDepth != null) String.format(Locale.US, "%.2f–%.2f m", minDepth, maxDepth) else "—"}"
+            textSize = 16f
+            setPadding(12, 12, 12, 12)
+        })
+        val map = SurveyMapView(this)
+        map.tracks = listOf(samples.map { Pair(it.first, it.second) })
+        map.current = null
+        container.addView(map, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.48f).toInt()))
+        container.addView(TextView(this).apply {
+            text = "First observations:\\n" + samples.take(12).mapIndexed { i, p ->
+                String.format(Locale.US, "%d. %.6f, %.6f  •  %.2f m", i + 1, p.first, p.second, p.third)
+            }.joinToString("\\n")
+            setPadding(12, 12, 12, 12)
+        })
+        android.app.AlertDialog.Builder(this).setTitle("Demo session review")
+            .setView(container)
+            .setNeutralButton("Export CSV") { _, _ -> exportFile(file) }
+            .setPositiveButton("Close", null).show()
+    }
+
     private fun showSurveyMap() {
         val files = File(filesDir, "surveys").listFiles { f -> f.isFile && f.extension == "csv" }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
