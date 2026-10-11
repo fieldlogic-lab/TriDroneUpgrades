@@ -83,6 +83,18 @@ class MainActivity : Activity(), LocationListener {
     }
     private fun setDemoMode(enabled: Boolean) {
         if (demoMode == enabled) return
+        if (demoRecording) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Stop demo recording?")
+                .setMessage("Switching modes will stop the current demo session. Recorded observations will be saved.")
+                .setNegativeButton("Keep recording", null)
+                .setPositiveButton("Stop and switch") { _, _ -> switchMode(enabled) }
+                .show()
+            return
+        }
+        switchMode(enabled)
+    }
+    private fun switchMode(enabled: Boolean) {
         stopDemoRecording()
         stopSimulation()
         demoMode = enabled
@@ -358,9 +370,11 @@ class MainActivity : Activity(), LocationListener {
         toolsCard.addView(action("Survey settings / coordinate systems") { showSurveySettings() })
         toolsCard.addView(action("Check for app updates") { AppUpdater.open(this@MainActivity) })
         toolsCard.addView(action("Live GNSS diagnostic map") { showLiveRtkMap() })
-        toolsCard.addView(action("Phone GPS test tools") {
-            legacyPanel.visibility = if (legacyPanel.visibility == android.view.View.VISIBLE)
-                android.view.View.GONE else android.view.View.VISIBLE
+        toolsCard.addView(action("Phone GPS diagnostic") {
+            android.app.AlertDialog.Builder(this@MainActivity)
+                .setTitle("Phone GPS is not survey-grade")
+                .setMessage("Phone-only position logging is a diagnostic and cannot substitute for RTK plus synchronized depth. This feature is excluded from the main survey workflow.")
+                .setPositiveButton("OK", null).show()
         })
         val testCard = section("DEVELOPMENT ONLY", "Synthetic soundings are never survey observations")
         testCard.visibility = android.view.View.GONE
@@ -383,11 +397,8 @@ class MainActivity : Activity(), LocationListener {
         })
         updateDemoUi()
         legacyPanel = layout
-        legacyPanel.visibility = android.view.View.GONE
-        val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        screen.addView(wizard)
-        screen.addView(legacyPanel)
-        root.addView(screen)
+        // Retain initialized legacy diagnostic fields without attaching the obsolete screen.
+        root.addView(wizard)
         setContentView(root)
     }
     override fun onResume() {
