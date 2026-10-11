@@ -143,6 +143,7 @@ class MainActivity : Activity(), LocationListener {
             handler.postDelayed(this, 1000)
         }
     }
+    private lateinit var surveySummary: TextView
     private lateinit var setupStatus: TextView
     private lateinit var setupNext: Button
     private lateinit var setupSounder: LinearLayout
@@ -430,6 +431,10 @@ class MainActivity : Activity(), LocationListener {
         }
         surveyPage.addView(heading("FIELD OPERATIONS", 12f, cyan))
         surveyPage.addView(heading("Ready to collect?", 22f).apply { setTypeface(null, Typeface.BOLD) })
+        surveySummary = heading("GNSS  •  Awaiting receiver\nSOUNDER  •  Not verified", 15f, Color.WHITE)
+        surveySummary.setPadding(18, 18, 18, 18)
+        surveySummary.setBackgroundColor(panel)
+        surveyPage.addView(surveySummary)
         surveyPage.addView(action("Connect & check equipment  →") { selectPage(2) })
         surveyPage.addView(action("Review previous sessions  →") { selectPage(1) })
         surveyPage.addView(heading("Connect both sensors before recording. Live survey collection remains locked until hardware validation.", 14f, muted))
@@ -770,6 +775,19 @@ class MainActivity : Activity(), LocationListener {
             (if (live) "  •  $fixType" else "  •  awaiting live GGA") +
             "\\n" + (gnss.getString("detail", "") ?: "") +
             "\\nGGA: " + gnss.getInt("fixes", 0)
+        if (::surveySummary.isInitialized) {
+            val diagnostic = getSharedPreferences("sounder_diagnostics", MODE_PRIVATE)
+            val depthState = diagnostic.getString("state", "disconnected")
+            surveySummary.text = if (demoMode) {
+                "GNSS  •  " + (if (demoGnss) "Demo connected" else "Connect demo GNSS") +
+                    "\\nSOUNDER  •  " + (if (demoSounder) "Demo connected" else "Connect demo sounder") +
+                    "\\nMODE  •  Synthetic observations only"
+            } else {
+                "GNSS  •  " + (if (live) fixType else "No live receiver fix") +
+                    "\\nSOUNDER  •  " + (if (depthState == "connected") "Diagnostic connection only" else "Not connected") +
+                    "\\nCOLLECTION  •  Awaiting hardware validation"
+            }
+        }
         setupSounder.alpha = if (live) 1f else 0.65f
         if (demoMode) { updateDemoUi() }
         val rt = getSharedPreferences("rtk_status", MODE_PRIVATE)
