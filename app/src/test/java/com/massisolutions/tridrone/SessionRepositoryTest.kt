@@ -5,6 +5,27 @@ import org.junit.Test
 import java.nio.file.Files
 
 class SessionRepositoryTest {
+    @Test fun realReceiverFixesAreReadableAndRawEvidenceRemainsExportable() {
+        val root = Files.createTempDirectory("tridrone-receiver").toFile()
+        try {
+            val live = root.resolve("surveys").apply { mkdirs() }
+            val fixes = live.resolve("wifi_fixes_1.csv")
+            fixes.writeText(RtkCoordinateExport.header + RtkCoordinateExport.row(123,
+                listOf("123519", "40.8", "-73.05", "4", "12", "0.7", "10", "-30", "1", "station"), SurveySettings()))
+            live.resolve("wifi_bytes_1.bin").writeBytes(byteArrayOf(0, 1, 2))
+            live.resolve("wifi_nmea_1.csv").writeText("received_utc_ms,received_elapsed_ms,nmea_sentence\n")
+            val repo = SessionRepository(root)
+            val session = repo.list(SessionRepository.Kind.LIVE).single()
+            assertEquals(1, session.observations)
+            assertEquals(40.8, repo.read(session).single().latitude, 0.00001)
+            assertNull(repo.read(session).single().depthMeters)
+            assertEquals(3, repo.artifacts().size)
+            assertThrows(IllegalArgumentException::class.java) {
+                repo.read(SessionRepository.Session(root.resolve("elsewhere.csv"), SessionRepository.Kind.LIVE, 0))
+            }
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun demoAndLiveSessionsNeverMix() {
         val root = Files.createTempDirectory("tridrone-test").toFile()
         try {

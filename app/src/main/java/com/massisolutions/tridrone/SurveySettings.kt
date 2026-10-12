@@ -41,8 +41,8 @@ object SurveyConfig {
             .putString("source", s.source).putString("favorites", s.favorites.sorted().joinToString(",")).apply()
     }
     /** Snapshot settings per session so later edits cannot rewrite historical metadata. */
-    fun writeSnapshot(c: Context, basename: String) {
+    fun writeSnapshot(c: Context, basename: String, settings: SurveySettings = load(c)) {
         val file = File(File(c.filesDir, "surveys").apply { mkdirs() }, "$basename.metadata.json")
-        file.writeText(load(c).json().put("captured_utc_ms", System.currentTimeMillis()).toString(2))
+        file.writeText(settings.json().put("captured_utc_ms", System.currentTimeMillis()).toString(2))
     }
 }
