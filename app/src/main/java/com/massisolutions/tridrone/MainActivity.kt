@@ -17,132 +17,6 @@ import android.location.LocationListener
 import android.location.LocationManager
 
 class MainActivity : Activity(), LocationListener {
-    private val modeController = SurveyModeController()
-    private val demoMode get() = modeController.state.mode == SurveyModeController.Mode.DEMO
-    private val demoGnss get() = modeController.state.demoGnssConnected
-    private val demoSounder get() = modeController.state.demoSounderConnected
-    private val demoRecording get() = modeController.state.recording
-    private var demoCount = 0
-    private val demoRecorder by lazy { DemoSessionRecorder(this) }
-    private val sessionsRepository by lazy { SessionRepository(filesDir) }
-    private var demoFile: File? = null
-    private lateinit var modeLabel: TextView
-    private lateinit var demoGnssButton: Button
-    private lateinit var demoSounderButton: Button
-    private lateinit var demoRecordButton: Button
-    private lateinit var demoStatus: TextView
-    private lateinit var liveCards: LinearLayout
-    private lateinit var demoCards: LinearLayout
-    private lateinit var liveGnssActions: LinearLayout
-    private lateinit var demoGnssActions: LinearLayout
-    private lateinit var liveSounderActions: LinearLayout
-    private lateinit var demoSounderActions: LinearLayout
-    private val demoTick = object : Runnable {
-        override fun run() {
-            if (!demoRecording || !demoMode) return
-            try {
-                demoRecorder.sample()
-                demoCount = demoRecorder.count
-                updateDemoUi()
-                handler.postDelayed(this, 1000)
-            } catch (e: Exception) {
-                stopDemoRecording()
-                Toast.makeText(this@MainActivity, "Demo write failed: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-    private fun stopDemoRecording() {
-        modeController.stopDemo()
-        handler.removeCallbacks(demoTick)
-        try { demoRecorder.stop() } catch (_: Exception) {}
-        if (::demoStatus.isInitialized) updateDemoUi()
-    }
-    private fun updateDemoUi() {
-        if (!::demoStatus.isInitialized) return
-        demoGnssButton.text = if (demoGnss) "GNSS connected (simulated)" else "Connect demo GNSS"
-        demoSounderButton.text = if (demoSounder) "Sounder connected (simulated)" else "Connect demo sounder"
-        demoSounderButton.isEnabled = demoGnss && !demoRecording
-        demoGnssButton.isEnabled = !demoRecording
-        demoRecordButton.isEnabled = demoGnss && demoSounder
-        demoRecordButton.text = if (demoRecording) "Stop demo recording" else "Start demo recording"
-        if (::setupNext.isInitialized) {
-            setupNext.isEnabled = demoMode && demoGnss && demoSounder
-            setupNext.text = if (demoMode) (if (demoRecording) "Stop recording" else "Start recording") else "Recording unavailable — setup incomplete"
-        }
-        if (::setupStatus.isInitialized && demoMode) setupStatus.text = if (demoGnss) "SIMULATED RTK FIX" else "Awaiting demo GNSS"
-        if (::sounderStatus.isInitialized && demoMode) sounderStatus.text = if (demoSounder) "SIMULATED DEPTH CONNECTED" else "Awaiting demo sounder"
-        demoStatus.text = "DEMO ONLY  •  ${demoCount} synthetic observations\n" +
-            "GNSS: ${if (demoGnss) "SIMULATED FIX" else "NOT CONNECTED"}  •  " +
-            "Depth: ${if (demoSounder) "SIMULATED" else "NOT CONNECTED"}"
-    }
-    private fun setDemoMode(enabled: Boolean) {
-        if (demoMode == enabled) return
-        if (demoRecording) {
-            android.app.AlertDialog.Builder(this)
-                .setTitle("Stop demo recording?")
-                .setMessage("Switching modes will stop the current demo session. Recorded observations will be saved.")
-                .setNegativeButton("Keep recording", null)
-                .setPositiveButton("Stop and switch") { _, _ -> switchMode(enabled) }
-                .show()
-            return
-        }
-        switchMode(enabled)
-    }
-    private fun switchMode(enabled: Boolean) {
-        stopDemoRecording()
-        stopSimulation()
-        check(modeController.switchMode(if (enabled) SurveyModeController.Mode.DEMO else SurveyModeController.Mode.LIVE))
-        demoCount = 0
-        liveGnssActions.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
-        demoGnssActions.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
-        liveSounderActions.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
-        demoSounderActions.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
-        setupNext.isEnabled = enabled && demoGnss && demoSounder
-        setupNext.text = if (enabled) "Start demo recording" else "Recording unavailable — setup incomplete"
-        modeLabel.text = if (enabled) "DEMO MODE  •  SYNTHETIC DATA" else "LIVE SURVEY  •  REAL HARDWARE"
-        demoStatus.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
-        updateDemoUi()
-    }
-    private fun startDemoRecording() {
-        if (!demoMode || !demoGnss || !demoSounder || demoRecording) return
-        try {
-            demoFile = demoRecorder.start()
-            demoCount = 0
-            check(modeController.startDemo())
-            updateDemoUi()
-            handler.post(demoTick)
-        } catch (e: Exception) {
-            stopDemoRecording()
-            Toast.makeText(this, "Cannot start demo: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-    private var simulationActive = false
-    private var simulationWriter: java.io.BufferedWriter? = null
-    private var simulationFile: File? = null
-    private var simulationCount = 0
-    private lateinit var simulationStatus: TextView
-    private val simulationTick = object : Runnable {
-        override fun run() {
-            if (!simulationActive) return
-            val p = getSharedPreferences("rtk_status", MODE_PRIVATE)
-            val now = System.currentTimeMillis()
-            val age = now - p.getLong("last_fix_ms", 0L)
-            val lat = p.getString("lat", "")?.toDoubleOrNull()
-            val lon = p.getString("lon", "")?.toDoubleOrNull()
-            val quality = p.getString("quality", "")
-            if (p.getString("state", "") == "connected" && age in 0..3000 && lat != null && lon != null) {
-                val depth = 2.5 + kotlin.math.sin(simulationCount * 0.12) * 0.4
-                val accepted = quality == "4"
-                try {
-                    simulationWriter?.write(String.format(Locale.US, "%d,%d,%.9f,%.9f,%s,%.3f,%s,SIMULATED,UNVERIFIED_OFFSETS,NO_VERTICAL_DATUM\\n", now, p.getLong("last_fix_ms", 0L), lat, lon, quality, depth, if (accepted) "RTK_FIXED_GNSS" else "GNSS_NOT_FIXED"))
-                    simulationWriter?.flush()
-                    simulationCount++
-                } catch (e: Exception) { stopSimulation(); Toast.makeText(this@MainActivity, "Simulation write failed: ${e.message}", Toast.LENGTH_LONG).show(); return }
-            }
-            simulationStatus.text = "SIMULATION ONLY • $simulationCount synthetic depth events • GNSS ${if (age in 0..3000) "live" else "stale"} • ${if (quality == "4") "FIX" else "NOT FIXED"}"
-            handler.postDelayed(this, 1000)
-        }
-    }
     private lateinit var surveySummary: TextView
     private lateinit var setupStatus: TextView
     private lateinit var setupNext: Button
@@ -303,10 +177,7 @@ class MainActivity : Activity(), LocationListener {
         wizard.addView(heading("TRIDRONE  /  HYDRO", 25f, cyan).apply { setTypeface(null, Typeface.BOLD) })
         wizard.addView(heading("FIELD CONSOLE   •   OFFLINE LOGGER", 12f, muted))
         wizard.addView(heading("Survey workspace", 21f).apply { setTypeface(null, Typeface.BOLD) })
-        modeLabel = heading("LIVE SURVEY  •  REAL HARDWARE", 15f, cyan)
-        wizard.addView(modeLabel)
         liveCards = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        demoCards = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
         // Destination sections are mounted into the tab host below.
         val gnssCard = section("01   GNSS RECEIVER", "Reach RS2+  /  Wi-Fi NMEA preferred")
         setupStatus = heading("Waiting for receiver", 15f, muted)
@@ -316,9 +187,6 @@ class MainActivity : Activity(), LocationListener {
         liveGnssActions.addView(action("Use Bluetooth instead") { connectRtk() })
         liveGnssActions.addView(heading("Connect to the receiver network first, then configure its NMEA IP and port. The app verifies incoming fixes; a network connection alone is not an RTK fix.", 13f, muted))
         gnssCard.addView(liveGnssActions)
-        demoGnssActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
-        demoGnssButton = action("Connect demo GNSS") { modeController.connectDemoGnss(); updateDemoUi() }
-        demoGnssActions.addView(demoGnssButton)
         val sounderCard = section("02   DEPTH SOUNDER", "HydroLite Plus  /  hardware verification pending")
         setupSounder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         setupSounder.addView(heading("No verified depth stream", 14f, muted))
@@ -326,9 +194,6 @@ class MainActivity : Activity(), LocationListener {
         setupSounder.addView(heading("Actual Bluetooth transport and depth messages must be confirmed on hardware. No verified live depth recording yet.", 13f, muted))
         liveSounderActions = setupSounder
         sounderCard.addView(liveSounderActions)
-        demoSounderActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
-        demoSounderButton = action("Connect demo sounder") { modeController.connectDemoSounder(); updateDemoUi() }
-        demoSounderActions.addView(demoSounderButton)
         val captureCard = section("03   SURVEY COLLECTION", "Continuous GNSS + depth logging")
         setupNext = action("3  Recording locked — depth not verified") {
             Toast.makeText(this@MainActivity, "Connect and validate real GNSS and depth before recording", Toast.LENGTH_LONG).show()
@@ -408,8 +273,6 @@ class MainActivity : Activity(), LocationListener {
         surveyPage.addView(action("Set up GNSS and sounder  →") { selectPage(2) })
         surveyPage.addView(action("Review previous sessions  →") { selectPage(1) })
         surveyPage.addView(heading("Connect both sensors before recording. Live survey collection remains locked until hardware validation.", 14f, muted))
-        (modeLabel.parent as? android.view.ViewGroup)?.removeView(modeLabel)
-        surveyPage.addView(modeLabel)
         (captureCard.parent as? android.view.ViewGroup)?.removeView(captureCard)
         surveyPage.addView(captureCard)
         sessionsPage.addView(heading("SESSIONS", 12f, cyan))
@@ -483,39 +346,7 @@ class MainActivity : Activity(), LocationListener {
         gpsMetrics.text = "Receiver horizontal precision: $h\nReceiver vertical precision: $v\n" +
             (if (fresh) "RS2+ satellites: " + r.getString("satellites", "—") + " • HDOP: " + r.getString("hdop", "—") else "Awaiting external RTK")
     }
-    private fun startSimulation() {
-        if (simulationActive) return
-        val p = getSharedPreferences("rtk_status", MODE_PRIVATE)
-        if (p.getString("state", "") != "connected" || System.currentTimeMillis() - p.getLong("last_fix_ms", 0L) !in 0..3000) {
-            Toast.makeText(this, "Connect live Emlid NMEA first", Toast.LENGTH_LONG).show()
-            return
-        }
-        try {
-            val folder = File(filesDir, "surveys").apply { mkdirs() }
-            val file = File(folder, "SIMULATED_DEPTH_${System.currentTimeMillis()}.csv")
-            simulationWriter = file.bufferedWriter()
-            simulationWriter?.write("event_utc_ms,gnss_received_utc_ms,latitude_deg,longitude_deg,gga_quality,simulated_depth_m,gnss_flag,data_source,offset_status,vertical_status\\n")
-            simulationWriter?.flush()
-            simulationFile = file
-            simulationCount = 0
-            simulationActive = true
-            simulationStatus.text = "SIMULATION RUNNING • NOT SURVEY DATA"
-            handler.post(simulationTick)
-        } catch (e: Exception) {
-            stopSimulation()
-            Toast.makeText(this, "Cannot start simulation: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-    private fun stopSimulation() {
-        simulationActive = false
-        handler.removeCallbacks(simulationTick)
-        try { simulationWriter?.close() } catch (_: Exception) {}
-        simulationWriter = null
-        if (::simulationStatus.isInitialized) simulationStatus.text = "Simulation stopped • $simulationCount test events"
-    }
     override fun onDestroy() {
-        stopSimulation()
-        stopDemoRecording()
         handler.removeCallbacks(refresh)
         super.onDestroy()
     }
@@ -606,10 +437,6 @@ class MainActivity : Activity(), LocationListener {
             }.show()
     }
     private fun showSounderDiagnostics() {
-        if (demoMode) {
-            Toast.makeText(this, "Sounder diagnostics are available in Live mode only", Toast.LENGTH_LONG).show()
-            return
-        }
         if (Build.VERSION.SDK_INT >= 31 &&
             checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 43)
@@ -860,57 +687,6 @@ class MainActivity : Activity(), LocationListener {
         dialog.setOnDismissListener { handler.removeCallbacks(ticker) }
         dialog.show()
     }
-    private fun showDemoReview() {
-        val sessions = sessionsRepository.list(SessionRepository.Kind.DEMO)
-        if (sessions.isEmpty()) {
-            Toast.makeText(this, "No demo recordings yet. Start and stop a demo session first.", Toast.LENGTH_LONG).show()
-            return
-        }
-        val labels = sessions.map { "${it.file.name}  •  ${it.observations} observations" }.toTypedArray()
-        android.app.AlertDialog.Builder(this).setTitle("DEMO sessions — synthetic only")
-            .setItems(labels) { _, index -> showDemoSession(sessions[index]) }
-            .setNegativeButton("Close", null).show()
-    }
-
-    private fun showDemoSession(session: SessionRepository.Session) {
-        val file = session.file
-        val samples = try {
-            sessionsRepository.read(session).mapNotNull { sample ->
-                sample.depthMeters?.let { Triple(sample.latitude, sample.longitude, it) }
-            }
-        } catch (e: Exception) {
-            Toast.makeText(this, "Invalid demo session: ${e.message}", Toast.LENGTH_LONG).show()
-            return
-        }
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(12, 12, 12, 12)
-        }
-        val minDepth = samples.minOfOrNull { it.third }
-        val maxDepth = samples.maxOfOrNull { it.third }
-        container.addView(TextView(this).apply {
-            text = "DEMO — SYNTHETIC DATA, NOT FOR SURVEY\n" +
-                "Observations: ${samples.size}\n" +
-                "Depth range: ${if (minDepth != null && maxDepth != null) String.format(Locale.US, "%.2f–%.2f m", minDepth, maxDepth) else "—"}"
-            textSize = 16f
-            setPadding(12, 12, 12, 12)
-        })
-        val map = SurveyMapView(this)
-        map.tracks = listOf(samples.map { Pair(it.first, it.second) })
-        map.current = null
-        container.addView(map, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.48f).toInt()))
-        container.addView(TextView(this).apply {
-            text = "First observations:\n" + samples.take(12).mapIndexed { i, p ->
-                String.format(Locale.US, "%d. %.6f, %.6f  •  %.2f m", i + 1, p.first, p.second, p.third)
-            }.joinToString("\n")
-            setPadding(12, 12, 12, 12)
-        })
-        android.app.AlertDialog.Builder(this).setTitle("Demo session review")
-            .setView(container)
-            .setNeutralButton("Export CSV") { _, _ -> exportFile(file) }
-            .setPositiveButton("Close", null).show()
-    }
-
     private fun showSurveyMap() {
         val sessions = sessionsRepository.list(SessionRepository.Kind.LIVE)
         val tracks = sessions.map { session ->
