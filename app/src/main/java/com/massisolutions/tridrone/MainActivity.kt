@@ -605,7 +605,10 @@ class MainActivity : Activity(), LocationListener {
         // green = verified acquisition status only. No simulated data can turn an indicator green.
         val receiverState = gnss.getString("state", "disconnected").orEmpty()
         val qualityCode = gnss.getString("quality", null)
-        val gnssGood = live && qualityCode == "4"
+        val precisionFresh = live && (System.currentTimeMillis() - gnss.getLong("gst_received_ms", 0L)) in 0..5000
+        val gnssGood = live && qualityCode == "4" &&
+            precisionFresh && gnss.getString("h_sigma_m", null)?.toDoubleOrNull()?.let { it.isFinite() && it >= 0 } == true &&
+            gnss.getString("v_sigma_m", null)?.toDoubleOrNull()?.let { it.isFinite() && it >= 0 } == true
         val gnssColor = when {
             gnssGood -> Color.rgb(24, 130, 75)
             receiverState == "connecting" || receiverState == "reconnecting" || live -> Color.rgb(177, 111, 24)
@@ -620,6 +623,7 @@ class MainActivity : Activity(), LocationListener {
             when {
                 gnssGood -> "RTK FIX"
                 live && qualityCode == "5" -> "FLOAT — WAIT"
+                live && qualityCode == "4" -> "FIX — CHECK PRECISION"
                 live -> "CHECK FIX"
                 receiverState == "connecting" || receiverState == "reconnecting" -> "CONNECTING"
                 else -> "CONNECT"
