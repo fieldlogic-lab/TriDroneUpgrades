@@ -121,6 +121,9 @@ class SounderDiagnosticService : Service() {
                 if (running.get()) status("error", if (timedOut) "Connection timed out; confirm pairing, power and supported Bluetooth interface. SPP is not verified." else e.message ?: "Bluetooth capture failed")
             } finally {
                 running.set(false)
+                ownership.withCurrent(generation) {
+                    if (prefs.getString("state", "") != "error") status("disconnected", "Capture stopped; raw diagnostics retained")
+                }
                 ownership.release(generation)
                 try { socket?.close() } catch (_: Exception) {}
                 socket = null
