@@ -76,7 +76,7 @@ class MainActivity : Activity() {
             }
             scroll.post { scroll.smoothScrollTo(0, focus?.top ?: 0); focus?.requestFocus() }
         }
-        listOf("Survey", "Sessions", "Equipment", "Settings").forEachIndexed { index, title ->
+        listOf("Survey", "Sessions", "Equipment", "Project Setup").forEachIndexed { index, title ->
             val button = action(title) { selectPage(index) }.apply {
                 textSize = 12f; minWidth = 0; minimumWidth = 0; setPadding(0, dp(8), 0, dp(8))
             }
@@ -125,9 +125,9 @@ class MainActivity : Activity() {
             sessions.addView(action("Review historical synthetic test records") { showSavedSurveys(SessionRepository.Kind.DEMO) })
         }
         sessions.addView(text("Existing records retain their original source and limitations. GNSS acquisition is not synchronized bathymetric collection.", 14f, muted))
-        settings.addView(text("Settings", 23f))
+        settings.addView(text("Project Setup", 23f))
         settingsStatus = text("", 16f, muted); settings.addView(settingsStatus)
-        settings.addView(action("Project / coordinate systems") { showSurveySettings() })
+        settings.addView(action("Edit job, next session & coordinate systems") { showSurveySettings() })
         settings.addView(action("Check for app updates") { AppUpdater.open(this) })
         root.addView(tabs); root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
@@ -175,61 +175,84 @@ class MainActivity : Activity() {
         render(gnssLamp, "GNSS · ${display.gnssLabel}", display.gnssLamp)
         render(depthLamp, "DEPTH · ${display.depthLabel}", display.depthLamp)
         render(collectionLamp, "COLLECTION · ${display.collectionLabel}", display.collectionLamp)
-        fun meters(value: Double?) = value?.let { String.format(Locale.US, "%.3f m", it) } ?: "UNAVAILABLE"
-        precision.text = "H PRECISION  ${meters(display.horizontalMeters)}\nV PRECISION  ${meters(display.verticalMeters)}"
+        val config = SurveyConfig.load(this)
+        precision.text = "H PRECISION  ${DisplayUnits.formatPrecision(display.horizontalMeters, config.units)}\n" +
+            "V PRECISION  ${DisplayUnits.formatPrecision(display.verticalMeters, config.units)}"
         gnssStatus.text = display.gnss + "\n" + prefs.getString("detail", "").orEmpty() +
             "\nNMEA: ${prefs.getInt("sentences", 0)} · GGA: ${prefs.getInt("fixes", 0)}"
         depthStatus.text = display.sounder
-        recordingStatus.text = display.recording
-        val config = SurveyConfig.load(this)
-        settingsStatus.text = "Horizontal: ${config.horizontal}\nVertical: ${config.vertical}\nProjected coordinates and bottom elevations require verified transformations and vertical control."
+        recordingStatus.text = display.recording + "\nNext session: ${config.sessionName.ifBlank { "Not named" }} · set in Project Setup"
+        settingsStatus.text = "Job: ${config.project.ifBlank { "Not named" }}\nNext session: ${config.sessionName.ifBlank { "Not named" }}\n" +
+            "Display units: ${DisplayUnits.label(config.units)}\nHorizontal: ${config.horizontal}\nVertical: ${config.vertical}\nSource datum: ${config.source}\n\n" +
+            "Display units do not change the selected CRS units or raw observations. Setup changes apply to future sessions; existing snapshots stay unchanged.\n" +
+            "Projected coordinates and bottom elevations require verified transformations and vertical control."
     }
     private fun showSurveySettings() {
         val current = SurveyConfig.load(this)
         val container = ScrollView(this)
         val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 20, 28, 20) }
-        fun heading(t: String) { form.addView(TextView(this).apply { text = t; textSize = 16f; setPadding(0, 14, 0, 8) }) }
-        heading("Project name (optional)")
-        val project = EditText(this).apply { setSingleLine(); setText(current.project); hint = "Survey project"; minimumHeight = dp(48) }
+        fun heading(t: String) { form.addView(TextView(this).apply { text = t; textSize = 16f; setPadding(0, dp(12), 0, dp(8)) }) }
+        fun selection(title: String, choices: List<Pair<String, String>>, selected: String): Pair<Spinner, List<Pair<String, String>>> {
+            heading(title)
+            // Unknown historical settings remain explicit and unchanged until the owner selects a supported option.
+            val options = if (choices.any { it.first == selected }) choices else choices + (selected to "$selected — stored value; support unverified")
+            val spinner = Spinner(this).apply {
+                minimumHeight = dp(48)
+                adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, options.map { it.second })
+                setSelection(options.indexOfFirst { it.first == selected })
+            }
+            form.addView(spinner)
+            return spinner to options
+        }
+        heading("Job / project name")
+        val project = EditText(this).apply {
+            setSingleLine(); setText(current.project); hint = "Job or project"; minimumHeight = dp(48)
+            filters = arrayOf(android.text.InputFilter.LengthFilter(120))
+        }
         form.addView(project)
-        heading("Horizontal output coordinate system")
-        val horizontal = Spinner(this)
-        val options = listOf("EPSG:6539 — NAD83(2011) NY Long Island ftUS", "EPSG:4326 — WGS 84 geographic")
-        horizontal.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, options)
-        horizontal.setSelection(if (current.horizontal == "EPSG:4326") 1 else 0)
-        form.addView(horizontal)
+        heading("Next collection session name — separate from job")
+        val session = EditText(this).apply {
+            setSingleLine(); setText(current.sessionName); hint = "e.g. Shoreline transect 01"; minimumHeight = dp(48)
+            filters = arrayOf(android.text.InputFilter.LengthFilter(120))
+        }
+        form.addView(session)
+        form.addView(TextView(this).apply {
+            text = "Names the next acquisition record, not the active session. Current recording is receiver diagnostics; synchronized GNSS/depth collection remains unavailable."
+        })
+        val (horizontal, horizontalOptions) = selection("Horizontal coordinate system", listOf(
+            "EPSG:6539" to "EPSG:6539 — NAD83(2011) / New York Long Island, US survey feet",
+            "EPSG:4326" to "EPSG:4326 — WGS 84 geographic, degrees"
+        ), current.horizontal)
         heading("Favorites")
         val favorite = CheckBox(this).apply { text = "Favorite selected horizontal CRS"; isChecked = current.horizontal in current.favorites }
         form.addView(favorite)
-        heading("Vertical reference")
-        form.addView(TextView(this).apply { text = "EPSG:6360 — NAVD88, US survey feet (configuration only; no elevations without vertical control)" })
-        heading("Display units")
-        val units = Spinner(this)
-        units.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("US survey feet", "Meters"))
-        units.setSelection(if (current.units == "m") 1 else 0)
-        form.addView(units)
-        heading("Source geodetic datum (verify receiver output)")
-        val source = Spinner(this)
-        source.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
-            listOf("UNKNOWN — preserve raw, no projected output", "EPSG:6318 — NAD83(2011), independently verified"))
-        source.setSelection(if (current.source == "EPSG:6318") 1 else 0)
-        form.addView(source)
+        val (vertical, verticalOptions) = selection("Vertical coordinate system / datum", listOf(
+            "EPSG:6360" to "EPSG:6360 — NAVD88 height, US survey feet (configuration only)"
+        ), current.vertical)
+        val unitChoices = listOf("usft" to "US survey feet (ftUS) — 1200/3937 meter", "ift" to "International feet (ft) — 0.3048 meter", "m" to "Meters (m)") +
+            if (current.units == "ft") listOf("ft" to "International feet (ft) — legacy setting, 0.3048 meter") else emptyList()
+        val (units, unitOptions) = selection("Precision display units — separate from CRS units", unitChoices, current.units)
+        val (source, sourceOptions) = selection("Source geodetic datum — verify receiver output", listOf(
+            "UNKNOWN" to "UNKNOWN — preserve raw, no projected output",
+            "EPSG:6318" to "EPSG:6318 — NAD83(2011), owner verified"
+        ), current.source)
         form.addView(TextView(this).apply {
-            text = "Selecting EPSG:6318 is an assertion about the incoming receiver coordinates, NOT an automatic transformation. Verify receiver configuration, datum realization/epoch and independent control. Android phone GPS remains unverified. No WGS84-to-NAD83(2011) datum operation is installed."
+            text = "Receiver GST is retained in native meters. Display conversions do not alter observations or CRS units. Selecting a CRS/datum does not validate a transformation or supply vertical corrections. Verify receiver datum, epoch and independent control. NAVD88 bottom elevations remain unavailable."
             setPadding(0, 20, 0, 12)
         })
         container.addView(form)
-        android.app.AlertDialog.Builder(this).setTitle("Survey settings").setView(container)
+        android.app.AlertDialog.Builder(this).setTitle("Project Setup").setView(container)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Save") { _, _ ->
-                val horizontalCode = if (horizontal.selectedItemPosition == 0) "EPSG:6539" else "EPSG:4326"
+                val horizontalCode = horizontalOptions[horizontal.selectedItemPosition].first
                 val favorites = current.favorites.toMutableSet()
                 if (favorite.isChecked) favorites.add(horizontalCode) else favorites.remove(horizontalCode)
-                SurveyConfig.save(this, SurveySettings(project.text.toString().trim(), horizontalCode,
-                    "EPSG:6360", if (units.selectedItemPosition == 0) "usft" else "m",
-                    if (source.selectedItemPosition == 0) "UNKNOWN" else "EPSG:6318", favorites))
+                SurveyConfig.save(this, current.copy(project = project.text.toString(), sessionName = session.text.toString(),
+                    horizontal = horizontalCode, vertical = verticalOptions[vertical.selectedItemPosition].first,
+                    units = unitOptions[units.selectedItemPosition].first, source = sourceOptions[source.selectedItemPosition].first,
+                    favorites = favorites))
                 updateDisplay()
-                Toast.makeText(this, "Settings saved; new sessions capture metadata", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Project Setup saved for future sessions; existing records unchanged", Toast.LENGTH_LONG).show()
             }.show()
     }
     private fun showWifiRtkSetup() {
