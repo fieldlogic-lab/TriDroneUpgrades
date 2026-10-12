@@ -1,0 +1,259 @@
+name: SolutionsHQ AI Development Team
+run-name: SolutionsHQ ${{ inputs.request_id }} / ${{ inputs.phase }}
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        type: choice
+        options: [plan, develop]
+        required: true
+      request_issue:
+        required: true
+        type: string
+      request_id:
+        required: true
+        type: string
+      plan_comment_id:
+        type: string
+      plan_sha256:
+        type: string
+
+# No automatic dispatch, merge, deployment or publishing triggers.
+permissions: {}
+concurrency:
+  group: solutionshq-${{ inputs.request_id }}
+  cancel-in-progress: false
+env:
+  PHASE: ${{ inputs.phase }}
+  REQUEST_ID: ${{ inputs.request_id }}
+  REQUEST_ISSUE: ${{ inputs.request_issue }}
+  PLAN_COMMENT_ID: ${{ inputs.plan_comment_id }}
+  PLAN_SHA256: ${{ inputs.plan_sha256 }}
+
+jobs:
+  intake:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/ai-team/runner.py intake
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: context
+          path: ${{ runner.temp }}/ai-team/context.json
+          retention-days: 7
+
+  agent:
+    needs: intake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: context
+          path: ${{ runner.temp }}/ai-team
+      # Keep trusted orchestration outside the model's writable repository.
+      - run: cp scripts/ai-team/runner.py "$RUNNER_TEMP/ai-team/trusted-runner.py"
+      - run: python3 "$RUNNER_TEMP/ai-team/trusted-runner.py" prompt
+      - uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: ${{ runner.temp }}/ai-team/prompt.txt
+          output-file: ${{ runner.temp }}/ai-team/message.txt
+          sandbox: ${{ inputs.phase == 'plan' && 'read-only' || 'workspace-write' }}
+          safety-strategy: drop-sudo
+          output-schema: '${{ inputs.phase == ''plan'' && ''{"type":"object","properties":{"summary":{"type":"string"},"acceptanceCriteria":{"type":"array","items":{"type":"string"}},"allowedPaths":{"type":"array","items":{"type":"string"}}},"required":["summary","acceptanceCriteria","allowedPaths"],"additionalProperties":false}'' || '''' }}'
+          codex-args: '["-c", "model_reasoning_effort=\"medium\"", "-c", "model_max_output_tokens=12000"]'
+      - run: python3 "$RUNNER_TEMP/ai-team/trusted-runner.py" pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: result
+          path: ${{ runner.temp }}/ai-team/result.json
+          retention-days: 7
+
+  publish:
+    needs: agent
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      head_sha: ${{ steps.publish.outputs.head_sha }}
+      pr_number: ${{ steps.publish.outputs.pr_number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: context
+          path: ${{ runner.temp }}/ai-team
+      - uses: actions/download-artifact@v4
+        with:
+          name: result
+          path: ${{ runner.temp }}/ai-team
+      - id: publish
+        run: python3 scripts/ai-team/runner.py publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  build:
+    if: inputs.phase == 'develop'
+    needs: publish
+    name: Android PR validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      build_exit: ${{ steps.build.outputs.exit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.publish.outputs.head_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - run: mkdir -p "$RUNNER_TEMP/ai-team"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK 35
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - id: build
+        name: Independently test, lint, and build the exact PR SHA
+        run: |
+          set +e
+          gradle --no-daemon --continue :app:testDebugUnitTest :app:lintDebug :app:assembleDebug > "$RUNNER_TEMP/ai-team/build.log" 2>&1
+          code=$?
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/ai-team/build.log"
+      - name: Upload independent check evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-evidence
+          path: |
+            ${{ runner.temp }}/ai-team/build.log
+            app/build/reports/
+            app/build/test-results/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Fail Android validation for nonzero exit
+        if: steps.build.outputs.exit != '0'
+        run: exit 1
+
+  qa:
+    needs: [publish, build]
+    if: always() && needs.publish.result == 'success' && inputs.phase == 'develop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      # A fresh runner never executes generated code while an API credential is available.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - run: mkdir -p "$RUNNER_TEMP/ai-team"; cp scripts/ai-team/runner.py "$RUNNER_TEMP/ai-team/trusted-runner.py"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.publish.outputs.head_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: context
+          path: ${{ runner.temp }}/ai-team
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-evidence
+          path: ${{ runner.temp }}/ai-team/evidence
+      - name: Prepare independent review at the exact SHA
+        run: |
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          python3 "$RUNNER_TEMP/ai-team/trusted-runner.py" qa-prompt
+        env:
+          HEAD_SHA: ${{ needs.publish.outputs.head_sha }}
+          BUILD_EXIT: ${{ needs.build.outputs.build_exit }}
+      - name: Fresh independent QA agent
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: ${{ runner.temp }}/ai-team/qa-prompt.txt
+          output-file: ${{ runner.temp }}/ai-team/qa.json
+          sandbox: read-only
+          safety-strategy: drop-sudo
+          output-schema: '{"type":"object","properties":{"status":{"type":"string","enum":["pass","fail","blocked"]},"findings":{"type":"array","items":{"type":"string"}},"summary":{"type":"string"}},"required":["status","findings","summary"],"additionalProperties":false}'
+          codex-args: '["-c", "model_reasoning_effort=\"medium\"", "-c", "model_max_output_tokens=8000"]'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qa
+          path: ${{ runner.temp }}/ai-team/qa.json
+          retention-days: 7
+
+  report:
+    needs: [publish, build, qa]
+    if: always() && inputs.phase == 'develop' && needs.qa.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      qa_status: ${{ steps.qa_report.outputs.qa_status }}
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: qa
+          path: ${{ runner.temp }}/ai-team
+      - id: qa_report
+        run: python3 scripts/ai-team/runner.py qa-publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ needs.publish.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.publish.outputs.pr_number }}
+          BUILD_EXIT: ${{ needs.build.outputs.build_exit }}
+      - name: Fail validation when independent checks or QA fail
+        if: needs.build.outputs.build_exit != '0' || steps.qa_report.outputs.qa_status != 'pass'
+        run: exit 1
+
+  failure:
+    needs: [intake, agent, publish, build, qa, report]
+    if: always() && needs.intake.result == 'success' && needs.report.outputs.qa_status == '' && (failure() || cancelled())
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/ai-team/runner.py failed
+        env:
+          GH_TOKEN: ${{ github.token }}
