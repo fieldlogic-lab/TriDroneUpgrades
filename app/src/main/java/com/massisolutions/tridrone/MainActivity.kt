@@ -606,7 +606,10 @@ class MainActivity : Activity(), LocationListener {
         val receiverState = gnss.getString("state", "disconnected").orEmpty()
         val qualityCode = gnss.getString("quality", null)
         val precisionFresh = live && (System.currentTimeMillis() - gnss.getLong("gst_received_ms", 0L)) in 0..5000
-        val gnssGood = live && qualityCode == "4" &&
+        val gstCurrent = live && (System.currentTimeMillis() - gnss.getLong("gst_received_ms", 0L)) in 0..5000
+        val validH = if (gstCurrent) gnss.getString("h_sigma_m", null)?.toDoubleOrNull()?.let { it.isFinite() && it >= 0 } == true else false
+        val validV = if (gstCurrent) gnss.getString("v_sigma_m", null)?.toDoubleOrNull()?.let { it.isFinite() && it >= 0 } == true else false
+        val gnssGood = live && qualityCode == "4" && validH && validV &&
             precisionFresh && gnss.getString("h_sigma_m", null)?.toDoubleOrNull()?.let { it.isFinite() && it >= 0 } == true &&
             gnss.getString("v_sigma_m", null)?.toDoubleOrNull()?.let { it.isFinite() && it >= 0 } == true
         val gnssColor = when {
@@ -622,6 +625,7 @@ class MainActivity : Activity(), LocationListener {
         styleLamp(surveyGnssLamp, "GNSS  •  " +
             when {
                 gnssGood -> "RTK FIX"
+                live && qualityCode == "4" -> "CHECK H/V PRECISION"
                 live && qualityCode == "5" -> "FLOAT — WAIT"
                 live && qualityCode == "4" -> "FIX — CHECK PRECISION"
                 live -> "CHECK FIX"
@@ -639,7 +643,7 @@ class MainActivity : Activity(), LocationListener {
         val vertical = if (gstFresh) gnss.getString("v_sigma_m", null)?.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } else null
         fun precision(v: Double?) = if (v == null) "Unavailable" else String.format(Locale.US, "%.3f m", v)
         surveyPrecision.text = "H PRECISION    " + precision(horizontal) +
-            "\\nV PRECISION    " + precision(vertical)
+            "\nV PRECISION    " + precision(vertical)
         setupSounder.alpha = 1f
         val rt = getSharedPreferences("rtk_status", MODE_PRIVATE)
         val rtAge = System.currentTimeMillis() - rt.getLong("last_fix_ms", 0L)
