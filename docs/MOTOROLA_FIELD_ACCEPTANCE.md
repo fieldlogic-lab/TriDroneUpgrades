@@ -3,7 +3,7 @@
 ## Evidence state
 - **Verified in GitHub CI:** Android PR validation run [38253812215](https://github.com/fieldlogic-lab/TriDroneUpgrades/actions/runs/38253812215) completed JVM tests, lint, and `assembleDebug` successfully for PR #3 (merged). This establishes a compilable build for that PR, **not** a separately verified manual release or installation.
 - **Unverified:** manual `android-apk.yml` dispatch and its artifact on current `main`; Android installation; app foreground/background recording; RS2+ Wi-Fi NMEA; HydroLite transport and message format; raw+processed export; state-plane transform and NAVD88 vertical corrections.
-- **Open:** [field readiness #1](../issues/1), [Codex orchestrator draft PR #4](../pull/4). Do not depend on PR #4 for hardware readiness.
+- **Open:** [field readiness #1](https://github.com/fieldlogic-lab/TriDroneUpgrades/issues/1), [Codex orchestrator draft PR #4](https://github.com/fieldlogic-lab/TriDroneUpgrades/pull/4). Do not depend on PR #4 for hardware readiness.
 
 ## Gate A — Build and installation (no hardware claims from CI)
 1. On a reviewed main commit, request explicit owner authorization **before** dispatching `Build TriDrone Android APK` (manual workflow; can publish an updated GitHub Release when signing secrets are configured).
