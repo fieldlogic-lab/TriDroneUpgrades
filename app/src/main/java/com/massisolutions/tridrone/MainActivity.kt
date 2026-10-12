@@ -743,18 +743,11 @@ class MainActivity : Activity(), LocationListener {
         if (::surveySummary.isInitialized) {
             val diagnostic = getSharedPreferences("sounder_diagnostics", MODE_PRIVATE)
             val depthState = diagnostic.getString("state", "disconnected")
-            surveySummary.text = if (demoMode) {
-                "GNSS  •  " + (if (demoGnss) "Demo connected" else "Connect demo GNSS") +
-                    "\\nSOUNDER  •  " + (if (demoSounder) "Demo connected" else "Connect demo sounder") +
-                    "\\nMODE  •  Synthetic observations only"
-            } else {
-                "GNSS  •  " + (if (live) fixType else "No live receiver fix") +
-                    "\\nSOUNDER  •  " + (if (depthState == "connected") "Diagnostic connection only" else "Not connected") +
-                    "\\nCOLLECTION  •  Awaiting hardware validation"
-            }
+            surveySummary.text = "1  GNSS  •  " + (if (live) fixType else "Connect RS2+ and await a live fix") +
+                "\\n2  SOUNDER  •  " + (if (depthState == "connected") "Diagnostic link only — depth unverified" else "Inspect HydroLite connection") +
+                "\\n3  RECORDING  •  Locked pending live depth validation"
         }
         setupSounder.alpha = if (live) 1f else 0.65f
-        if (demoMode) { updateDemoUi() }
         val rt = getSharedPreferences("rtk_status", MODE_PRIVATE)
         val rtAge = System.currentTimeMillis() - rt.getLong("last_fix_ms", 0L)
         val fixed = rt.getString("state", "") == "connected" && rt.getString("quality", "") == "4" && rtAge in 0..5000
@@ -764,7 +757,6 @@ class MainActivity : Activity(), LocationListener {
             "\nHydroLite depth unavailable" +
             "\nSynchronized capture not implemented"
         sounderStatus.text = "Disconnected • Depth unavailable"
-        if (demoMode) updateDemoUi()
         val rp = getSharedPreferences("rtk_status", MODE_PRIVATE)
         val rtkAge = (System.currentTimeMillis() - rp.getLong("last_fix_ms", 0L)) / 1000
         val quality = rp.getString("quality", "?") ?: "?"
