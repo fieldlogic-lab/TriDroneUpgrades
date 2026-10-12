@@ -19,9 +19,10 @@ import java.util.concurrent.TimeUnit
  */
 class SounderDiagnosticService : Service() {
     companion object {
-        private val captureActive = AtomicBoolean(false)
-        fun active(): Boolean = captureActive.get()
+        private val ownership = CaptureOwnership()
+        fun active(): Boolean = ownership.active()
     }
+    private val generation = UUID.randomUUID().toString()
     private val running = AtomicBoolean(false)
     private val started = AtomicBoolean(false)
     @Volatile private var socket: BluetoothSocket? = null
@@ -31,7 +32,9 @@ class SounderDiagnosticService : Service() {
     private val spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
     private fun status(state: String, detail: String = "") {
-        prefs.edit().putString("state", state).putString("detail", detail).apply()
+        ownership.withCurrent(generation) {
+            prefs.edit().putString("state", state).putString("detail", detail).apply()
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -56,7 +59,7 @@ class SounderDiagnosticService : Service() {
         }
         if (!started.compareAndSet(false, true)) return START_NOT_STICKY
         running.set(true)
-        captureActive.set(true)
+        ownership.claim(generation)
         val address = intent?.getStringExtra("address").orEmpty()
         Thread {
             var logFile: File? = null
@@ -80,8 +83,9 @@ class SounderDiagnosticService : Service() {
                 connectTimeout.cancel(false)
                 val directory = File(filesDir, "sounder_diagnostics").apply { mkdirs() }
                 logFile = File(directory, "sounder_raw_${System.currentTimeMillis()}_${UUID.randomUUID()}.bin")
-                prefs.edit().putString("file", logFile.absolutePath)
+                ownership.withCurrent(generation) { prefs.edit().putString("file", logFile.absolutePath)
                     .putLong("bytes", 0L).putInt("frames", 0).remove("preview").apply()
+                }
                 status("connected", "Raw diagnostic capture only; SPP support and depth protocol unverified")
                 val framer = DepthStreamDecoder()
                 var bytesTotal = 0L
@@ -103,10 +107,11 @@ class SounderDiagnosticService : Service() {
                             bytesTotal += count
                             val frames = framer.accept(buffer, count)
                             framesTotal += frames.size
-                            prefs.edit().putLong("bytes", bytesTotal)
+                            ownership.withCurrent(generation) { prefs.edit().putLong("bytes", bytesTotal)
                                 .putInt("frames", framesTotal)
                                 .putString("preview", frames.lastOrNull()?.take(160) ?: "")
                                 .apply()
+                            }
                         }
                     }
                 }
@@ -116,7 +121,7 @@ class SounderDiagnosticService : Service() {
                 if (running.get()) status("error", if (timedOut) "Connection timed out; confirm pairing, power and supported Bluetooth interface. SPP is not verified." else e.message ?: "Bluetooth capture failed")
             } finally {
                 running.set(false)
-                captureActive.set(false)
+                ownership.release(generation)
                 try { socket?.close() } catch (_: Exception) {}
                 socket = null
                 stopSelf()
@@ -127,10 +132,10 @@ class SounderDiagnosticService : Service() {
 
     override fun onDestroy() {
         running.set(false)
-        captureActive.set(false)
         watchdog.shutdownNow()
         try { socket?.close() } catch (_: Exception) {}
         if (prefs.getString("state", "") != "error") status("disconnected", "Capture stopped")
+        ownership.release(generation)
         super.onDestroy()
     }
 }

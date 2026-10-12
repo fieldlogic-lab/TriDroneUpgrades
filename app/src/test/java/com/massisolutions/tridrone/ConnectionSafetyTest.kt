@@ -4,6 +4,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConnectionSafetyTest {
+    @Test fun stoppedSounderCannotOverwriteNewCaptureOrClearItsActiveState() {
+        val ownership = CaptureOwnership()
+        var status = ""
+        ownership.claim("old")
+        ownership.claim("new")
+        ownership.withCurrent("new") { status = "connected" }
+        ownership.withCurrent("old") { status = "disconnected" }
+        ownership.release("old")
+        assertEquals("connected", status)
+        assertTrue(ownership.active())
+        ownership.release("new")
+        assertFalse(ownership.active())
+    }
     @Test fun reconnectIsBoundedAndFreshnessUsesNonnegativeMonotonicAge() {
         assertTrue(ConnectionPolicy.retry(1))
         assertTrue(ConnectionPolicy.retry(2))

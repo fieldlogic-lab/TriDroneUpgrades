@@ -15,6 +15,15 @@ object GnssConnectionOwner {
     @Synchronized fun release(id: String) { if (owner == id) { owner = null; cancel = null } }
 }
 
+/** Generation guard for callbacks from a stopped sounder instance. */
+class CaptureOwnership {
+    private var owner: String? = null
+    @Synchronized fun claim(id: String) { owner = id }
+    @Synchronized fun active(): Boolean = owner != null
+    @Synchronized fun withCurrent(id: String, action: () -> Unit) { if (owner == id) action() }
+    @Synchronized fun release(id: String) { if (owner == id) owner = null }
+}
+
 object NmeaEpoch {
     fun seconds(value: String): Double? {
         if (!value.matches(Regex("\\d{6}(?:\\.\\d+)?"))) return null
