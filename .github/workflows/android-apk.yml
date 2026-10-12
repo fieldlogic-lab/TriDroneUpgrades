@@ -1,18 +1,10 @@
 name: Build TriDrone Android APK
-# Signing secret validation rerun
 on:
-  push:
-    branches: [main]
-    paths:
-      - "app/**"
-      - "build.gradle.kts"
-      - "settings.gradle.kts"
-      - "gradle.properties"
-      - ".github/workflows/android-apk.yml"
   workflow_dispatch:
 
 jobs:
   build:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -94,4 +86,4 @@ jobs:
           echo "Update feed: https://github.com/$GITHUB_REPOSITORY/releases/download/dev-latest/latest.json"
       - name: Report missing signing configuration
         if: ${{ env.TRIDRONE_KEYSTORE_PATH == '' }}
-        run: echo "::warning::Set TRIDRONE_KEYSTORE_BASE64 and signing secrets to enable automatic release publishing."
+        run: echo "::warning::Set TRIDRONE_KEYSTORE_BASE64 and signing secrets to enable release publishing for approved manual runs."
