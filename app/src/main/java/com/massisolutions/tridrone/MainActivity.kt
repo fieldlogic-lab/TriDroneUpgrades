@@ -4,602 +4,255 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.*
+import android.graphics.Color
+import android.graphics.Typeface
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.view.View
 import android.widget.*
 import java.io.File
 import java.util.Locale
-import java.text.DateFormat
-import java.util.Date
-import android.graphics.Typeface
-import android.graphics.Color
-import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
 
-class MainActivity : Activity(), LocationListener {
-    private val modeController = SurveyModeController()
-    private val demoMode get() = modeController.state.mode == SurveyModeController.Mode.DEMO
-    private val demoGnss get() = modeController.state.demoGnssConnected
-    private val demoSounder get() = modeController.state.demoSounderConnected
-    private val demoRecording get() = modeController.state.recording
-    private var demoCount = 0
-    private val demoRecorder by lazy { DemoSessionRecorder(this) }
+/** Presentation only. Receiver services own acquisition; connection is not survey readiness. */
+class MainActivity : Activity() {
     private val sessionsRepository by lazy { SessionRepository(filesDir) }
-    private var demoFile: File? = null
-    private lateinit var modeLabel: TextView
-    private lateinit var demoGnssButton: Button
-    private lateinit var demoSounderButton: Button
-    private lateinit var demoRecordButton: Button
-    private lateinit var demoStatus: TextView
-    private lateinit var liveCards: LinearLayout
-    private lateinit var demoCards: LinearLayout
-    private lateinit var liveGnssActions: LinearLayout
-    private lateinit var demoGnssActions: LinearLayout
-    private lateinit var liveSounderActions: LinearLayout
-    private lateinit var demoSounderActions: LinearLayout
-    private val demoTick = object : Runnable {
-        override fun run() {
-            if (!demoRecording || !demoMode) return
-            try {
-                demoRecorder.sample()
-                demoCount = demoRecorder.count
-                updateDemoUi()
-                handler.postDelayed(this, 1000)
-            } catch (e: Exception) {
-                stopDemoRecording()
-                Toast.makeText(this@MainActivity, "Demo write failed: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-    private fun stopDemoRecording() {
-        modeController.stopDemo()
-        handler.removeCallbacks(demoTick)
-        try { demoRecorder.stop() } catch (_: Exception) {}
-        if (::demoStatus.isInitialized) updateDemoUi()
-    }
-    private fun updateDemoUi() {
-        if (!::demoStatus.isInitialized) return
-        demoGnssButton.text = if (demoGnss) "GNSS connected (simulated)" else "Connect demo GNSS"
-        demoSounderButton.text = if (demoSounder) "Sounder connected (simulated)" else "Connect demo sounder"
-        demoSounderButton.isEnabled = demoGnss && !demoRecording
-        demoGnssButton.isEnabled = !demoRecording
-        demoRecordButton.isEnabled = demoGnss && demoSounder
-        demoRecordButton.text = if (demoRecording) "Stop demo recording" else "Start demo recording"
-        if (::setupNext.isInitialized) {
-            setupNext.isEnabled = demoMode && demoGnss && demoSounder
-            setupNext.text = if (demoMode) (if (demoRecording) "Stop recording" else "Start recording") else "Recording unavailable — setup incomplete"
-        }
-        if (::setupStatus.isInitialized && demoMode) setupStatus.text = if (demoGnss) "SIMULATED RTK FIX" else "Awaiting demo GNSS"
-        if (::sounderStatus.isInitialized && demoMode) sounderStatus.text = if (demoSounder) "SIMULATED DEPTH CONNECTED" else "Awaiting demo sounder"
-        demoStatus.text = "DEMO ONLY  •  ${demoCount} synthetic observations\n" +
-            "GNSS: ${if (demoGnss) "SIMULATED FIX" else "NOT CONNECTED"}  •  " +
-            "Depth: ${if (demoSounder) "SIMULATED" else "NOT CONNECTED"}"
-    }
-    private fun setDemoMode(enabled: Boolean) {
-        if (demoMode == enabled) return
-        if (demoRecording) {
-            android.app.AlertDialog.Builder(this)
-                .setTitle("Stop demo recording?")
-                .setMessage("Switching modes will stop the current demo session. Recorded observations will be saved.")
-                .setNegativeButton("Keep recording", null)
-                .setPositiveButton("Stop and switch") { _, _ -> switchMode(enabled) }
-                .show()
-            return
-        }
-        switchMode(enabled)
-    }
-    private fun switchMode(enabled: Boolean) {
-        stopDemoRecording()
-        stopSimulation()
-        check(modeController.switchMode(if (enabled) SurveyModeController.Mode.DEMO else SurveyModeController.Mode.LIVE))
-        demoCount = 0
-        liveGnssActions.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
-        demoGnssActions.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
-        liveSounderActions.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
-        demoSounderActions.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
-        setupNext.isEnabled = enabled && demoGnss && demoSounder
-        setupNext.text = if (enabled) "Start demo recording" else "Recording unavailable — setup incomplete"
-        modeLabel.text = if (enabled) "DEMO MODE  •  SYNTHETIC DATA" else "LIVE SURVEY  •  REAL HARDWARE"
-        demoStatus.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
-        updateDemoUi()
-    }
-    private fun startDemoRecording() {
-        if (!demoMode || !demoGnss || !demoSounder || demoRecording) return
-        try {
-            demoFile = demoRecorder.start()
-            demoCount = 0
-            check(modeController.startDemo())
-            updateDemoUi()
-            handler.post(demoTick)
-        } catch (e: Exception) {
-            stopDemoRecording()
-            Toast.makeText(this, "Cannot start demo: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-    private var simulationActive = false
-    private var simulationWriter: java.io.BufferedWriter? = null
-    private var simulationFile: File? = null
-    private var simulationCount = 0
-    private lateinit var simulationStatus: TextView
-    private val simulationTick = object : Runnable {
-        override fun run() {
-            if (!simulationActive) return
-            val p = getSharedPreferences("rtk_status", MODE_PRIVATE)
-            val now = System.currentTimeMillis()
-            val age = now - p.getLong("last_fix_ms", 0L)
-            val lat = p.getString("lat", "")?.toDoubleOrNull()
-            val lon = p.getString("lon", "")?.toDoubleOrNull()
-            val quality = p.getString("quality", "")
-            if (p.getString("state", "") == "connected" && age in 0..3000 && lat != null && lon != null) {
-                val depth = 2.5 + kotlin.math.sin(simulationCount * 0.12) * 0.4
-                val accepted = quality == "4"
-                try {
-                    simulationWriter?.write(String.format(Locale.US, "%d,%d,%.9f,%.9f,%s,%.3f,%s,SIMULATED,UNVERIFIED_OFFSETS,NO_VERTICAL_DATUM\\n", now, p.getLong("last_fix_ms", 0L), lat, lon, quality, depth, if (accepted) "RTK_FIXED_GNSS" else "GNSS_NOT_FIXED"))
-                    simulationWriter?.flush()
-                    simulationCount++
-                } catch (e: Exception) { stopSimulation(); Toast.makeText(this@MainActivity, "Simulation write failed: ${e.message}", Toast.LENGTH_LONG).show(); return }
-            }
-            simulationStatus.text = "SIMULATION ONLY • $simulationCount synthetic depth events • GNSS ${if (age in 0..3000) "live" else "stale"} • ${if (quality == "4") "FIX" else "NOT FIXED"}"
-            handler.postDelayed(this, 1000)
-        }
-    }
-    private lateinit var surveySummary: TextView
-    private lateinit var setupStatus: TextView
-    private lateinit var setupNext: Button
-    private lateinit var setupSounder: LinearLayout
-    private lateinit var legacyPanel: LinearLayout
-    private lateinit var readiness: TextView
-    private lateinit var sounderStatus: TextView
-    private lateinit var gpsBar: TextView
-    private lateinit var gpsMetrics: TextView
-    private lateinit var locationManager: LocationManager
-    private var previewFix: Location? = null
-    private lateinit var rtkStatus: TextView
-    private lateinit var status: TextView
-    private lateinit var details: TextView
-    private lateinit var sessions: TextView
-    private lateinit var precision: TextView
-    private lateinit var timing: TextView
-    private lateinit var lastFix: TextView
-    private lateinit var crsSpinner: Spinner
-    private val crsLabels = arrayOf("NY Long Island NAD83(2011) — EPSG:6539", "WGS84 geographic — EPSG:4326")
-    private val crsCodes = arrayOf("EPSG:6539", "EPSG:4326")
     private val handler = Handler(Looper.getMainLooper())
-    private val requestCode = 31
+    private val dialogRefreshes = mutableListOf<Runnable>()
+    private val navy = Color.rgb(12, 24, 39)
+    private val panel = Color.rgb(24, 40, 58)
+    private val muted = Color.rgb(192, 209, 221)
+    private val cyan = Color.rgb(89, 208, 228)
+    private lateinit var gnssLamp: Button
+    private lateinit var depthLamp: Button
+    private lateinit var collectionLamp: Button
+    private lateinit var precision: TextView
+    private lateinit var gnssStatus: TextView
+    private lateinit var depthStatus: TextView
+    private lateinit var recordingStatus: TextView
+    private lateinit var settingsStatus: TextView
     private val refresh = object : Runnable {
-        override fun run() {
-            updateDisplay()
-            handler.postDelayed(this, 1000)
-        }
+        override fun run() { updateDisplay(); handler.postDelayed(this, 1000) }
+    }
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+    private fun text(value: String, size: Float = 16f, color: Int = Color.WHITE) = TextView(this).apply {
+        text = value; textSize = size; setTextColor(color); setPadding(dp(4), dp(10), dp(4), dp(10))
+    }
+    private fun action(value: String, click: () -> Unit) = Button(this).apply {
+        text = value; isAllCaps = false; textSize = 16f
+        minHeight = dp(52); minimumHeight = dp(52)
+        setOnClickListener { click() }
+    }
+    private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    private fun card(title: String) = column().apply {
+        setPadding(dp(12), dp(10), dp(12), dp(14)); setBackgroundColor(panel)
+        addView(text(title, 20f).apply { setTypeface(null, Typeface.BOLD) })
+        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(18) }
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val root = ScrollView(this)
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(32, 44, 32, 36)
-        }
-        fun label(text: String, size: Float): TextView = TextView(this).apply {
-            this.text = text
-            textSize = size
-            setPadding(0, 10, 0, 10)
-        }
-        layout.addView(label("TRIDRONE  |  HYDROGRAPHIC SURVEY", 23f).apply { setTypeface(null, Typeface.BOLD) })
-        layout.addView(label("GNSS acquisition  •  Offline  •  Field mode", 14f))
-        gpsBar = label("GNSS STATUS • SEARCHING", 19f).apply { setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE); setBackgroundColor(Color.DKGRAY); setPadding(20,20,20,20) }
-        gpsMetrics = label("Horizontal: —\nVertical: —", 17f)
-        layout.addView(gpsBar)
-        layout.addView(gpsMetrics)
-        layout.addView(Button(this).apply { text = "CONNECT REACH RS2+ GNSS"; setOnClickListener { connectRtk() } })
-        locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
-        layout.addView(label("SOUNDER / HYDROLITE PLUS", 15f).apply { setTypeface(null, Typeface.BOLD) })
-        sounderStatus = label("Disconnected • Depth unavailable", 17f)
-        layout.addView(sounderStatus)
-        layout.addView(Button(this).apply {
-            text = "SOUNDER CONNECTION"
-            setOnClickListener {
-                android.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle("HydroLite Plus")
-                    .setMessage("Sounder transport and message protocol require hardware verification. No live depth connection is implemented yet.")
-                    .setPositiveButton("OK", null).show()
-            }
-        })
-        readiness = label("SURVEY READINESS • NOT READY", 17f).apply { setTypeface(null, Typeface.BOLD) }
-        layout.addView(readiness)
-        layout.addView(Button(this).apply {
-            text = "CAPTURE GNSS + DEPTH OBSERVATION"
-            isEnabled = false
-        })
-        layout.addView(label("Capture is unavailable until RTK, sensor offsets, sounder depth and epoch synchronization are validated.", 13f))
-        status = label("Checking logger status...", 19f)
-        details = label("Waiting for GPS observations", 17f)
-        sessions = label("No sessions yet", 15f)
-        layout.addView(Button(this).apply { text = "SURVEY SETTINGS / COORDINATE SYSTEMS"; setOnClickListener { showSurveySettings() } })
-        layout.addView(label("HORIZONTAL COORDINATE SYSTEM (CONFIGURATION)", 15f).apply { visibility = android.view.View.GONE })
-        crsSpinner = Spinner(this)
-        crsSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, crsLabels)
-        val settings = getSharedPreferences("survey_settings", MODE_PRIVATE)
-        crsSpinner.setSelection(if (SurveyConfig.load(this).horizontal == "EPSG:4326") 1 else 0)
-        crsSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
-                val current = SurveyConfig.load(this@MainActivity)
-                SurveyConfig.save(this@MainActivity, current.copy(horizontal = crsCodes[position]))
-                updateDisplay()
-            }
-        }
-        crsSpinner.visibility = android.view.View.GONE
-        layout.addView(crsSpinner)
-
-        layout.addView(label("EXTERNAL RTK — REACH RS2+", 15f))
-        rtkStatus = label("RTK: disconnected", 16f)
-        layout.addView(rtkStatus)
-        layout.addView(Button(this).apply { text = "DISCONNECT RTK"; setOnClickListener { stopService(Intent(this@MainActivity, RtkService::class.java)) } })
-
-        layout.addView(label("PHONE GPS LOGGER (NOT RTK)", 14f))
-        status.setTypeface(null, Typeface.BOLD)
-        layout.addView(status)
-        timing = label("Survey not started", 17f)
-        layout.addView(timing)
-        precision = label("Horizontal accuracy: awaiting fix", 19f).apply { setTypeface(null, Typeface.BOLD) }
-        layout.addView(precision)
-        lastFix = label("Last fix: none", 14f)
-        layout.addView(lastFix)
-
-        layout.addView(details)
-        layout.addView(Button(this).apply {
-            text = "START PHONE GPS TEST LOG (NOT RTK)"
-            setOnClickListener { startSurvey() }
-        })
-        layout.addView(Button(this).apply {
-            text = "STOP PHONE GPS TEST LOG"
-            setOnClickListener {
-                stopService(Intent(this@MainActivity, SurveyService::class.java))
-                status.text = "Stop requested"
-                updateDisplay()
-            }
-        })
-        layout.addView(Button(this).apply {
-            text = "EXPORT LATEST CSV"
-            setOnClickListener { exportLatest() }
-        })
-        layout.addView(Button(this).apply { text = "OPEN SURVEY MAP"; setOnClickListener { showSurveyMap() } })
-        layout.addView(Button(this).apply { text = "VIEW SAVED SURVEYS AND POINTS"; setOnClickListener { showSavedSurveys() } })
-
-
-        layout.addView(label("EPSG:6539 export is provisional pending datum and control verification. Phone GPS is not survey-grade.", 13f))
-        // Field console: single clear workflow with diagnostics kept out of the primary view.
-        val navy = Color.rgb(12, 24, 39)
-        val panel = Color.rgb(24, 40, 58)
-        val muted = Color.rgb(165, 185, 201)
-        val cyan = Color.rgb(89, 208, 228)
-        val wizard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 28, 24, 24)
-            setBackgroundColor(navy)
-        }
-        fun heading(value: String, size: Float, color: Int = Color.WHITE) = TextView(this).apply {
-            text = value
-            textSize = size
-            setTextColor(color)
-            setPadding(8, 12, 8, 12)
-        }
-        fun section(title: String, subtitle: String): LinearLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(16, 14, 16, 16)
-            setBackgroundColor(panel)
-            addView(heading(title, 19f).apply { setTypeface(null, Typeface.BOLD) })
-            addView(heading(subtitle, 13f, muted))
-            val params = LinearLayout.LayoutParams(-1, -2)
-            params.bottomMargin = 16
-            (if (::liveCards.isInitialized) liveCards else wizard).addView(this, params)
-        }
-        fun action(title: String, click: () -> Unit): Button = Button(this).apply {
-            text = title
-            isAllCaps = false
-            textSize = 15f
-            setOnClickListener { click() }
-        }
-        wizard.addView(heading("TRIDRONE  /  HYDRO", 25f, cyan).apply { setTypeface(null, Typeface.BOLD) })
-        wizard.addView(heading("FIELD CONSOLE   •   OFFLINE LOGGER", 12f, muted))
-        wizard.addView(heading("Survey workspace", 21f).apply { setTypeface(null, Typeface.BOLD) })
-        modeLabel = heading("LIVE SURVEY  •  REAL HARDWARE", 15f, cyan)
-        wizard.addView(modeLabel)
-        val modeSwitch = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val liveButton = action("LIVE") { setDemoMode(false) }
-        val demoButton = action("DEMO") { setDemoMode(true) }
-        modeSwitch.addView(liveButton, LinearLayout.LayoutParams(0, -2, 1f))
-        modeSwitch.addView(demoButton, LinearLayout.LayoutParams(0, -2, 1f))
-        wizard.addView(modeSwitch)
-        liveCards = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        demoCards = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
-        // Destination sections are mounted into the tab host below.
-        val gnssCard = section("01   GNSS RECEIVER", "Reach RS2+  /  Wi-Fi NMEA preferred")
-        setupStatus = heading("Waiting for receiver", 15f, muted)
-        gnssCard.addView(setupStatus)
-        liveGnssActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        liveGnssActions.addView(action("Connect Emlid via Wi-Fi") { showWifiRtkSetup() })
-        liveGnssActions.addView(action("Bluetooth backup") { connectRtk() })
-        gnssCard.addView(liveGnssActions)
-        demoGnssActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
-        demoGnssButton = action("Connect demo GNSS") { modeController.connectDemoGnss(); updateDemoUi() }
-        demoGnssActions.addView(demoGnssButton)
-        gnssCard.addView(demoGnssActions)
-        val sounderCard = section("02   DEPTH SOUNDER", "HydroLite Plus  /  hardware verification pending")
-        setupSounder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        setupSounder.addView(heading("No verified depth stream", 14f, muted))
-        setupSounder.addView(action("Sounder diagnostics • connect / inspect") { showSounderDiagnostics() })
-        liveSounderActions = setupSounder
-        sounderCard.addView(liveSounderActions)
-        demoSounderActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
-        demoSounderButton = action("Connect demo sounder") { modeController.connectDemoSounder(); updateDemoUi() }
-        demoSounderActions.addView(demoSounderButton)
-        sounderCard.addView(demoSounderActions)
-        val captureCard = section("03   SURVEY COLLECTION", "Continuous GNSS + depth logging")
-        setupNext = action("Recording unavailable — setup incomplete") {
-            if (demoMode) { if (demoRecording) stopDemoRecording() else startDemoRecording(); updateDemoUi() }
-        }
-        setupNext.isEnabled = false
-        captureCard.addView(setupNext)
-        captureCard.addView(heading("LIVE: Recording requires verified depth, offsets and synchronization. DEMO: Synthetic observations only.", 13f, muted))
-        val reviewCard = section("SESSIONS & REVIEW", "Inspect observations after recovery")
-        reviewCard.addView(action("Saved surveys and points") { if (demoMode) showDemoReview() else showSavedSurveys() })
-        reviewCard.addView(action("Export latest CSV") {
-            if (demoMode) {
-                val file = sessionsRepository.latest(SessionRepository.Kind.DEMO)
-                if (file != null) exportFile(file) else Toast.makeText(this@MainActivity, "No demo sessions yet", Toast.LENGTH_SHORT).show()
-            } else exportLatest()
-        })
-        val toolsCard = section("SETTINGS & DIAGNOSTICS", "Advanced tools, configuration and tests")
-        toolsCard.addView(action("Survey settings / coordinate systems") { showSurveySettings() })
-        toolsCard.addView(action("Check for app updates") { AppUpdater.open(this@MainActivity) })
-        toolsCard.addView(action("Live GNSS diagnostic map") { showLiveRtkMap() })
-        toolsCard.addView(action("Phone GPS diagnostic") {
-            android.app.AlertDialog.Builder(this@MainActivity)
-                .setTitle("Phone GPS is not survey-grade")
-                .setMessage("Phone-only position logging is a diagnostic and cannot substitute for RTK plus synchronized depth. This feature is excluded from the main survey workflow.")
-                .setPositiveButton("OK", null).show()
-        })
-        val testCard = section("DEVELOPMENT ONLY", "Synthetic soundings are never survey observations")
-        testCard.visibility = android.view.View.GONE
-        simulationStatus = heading("Simulation stopped", 14f, muted)
-        testCard.addView(simulationStatus)
-        testCard.addView(action("Start simulated depth test") { startSimulation() })
-        testCard.addView(action("Stop simulation") { stopSimulation() })
-        testCard.addView(action("Export simulation CSV") {
-            val file = simulationFile
-            if (file == null || !file.exists())
-                Toast.makeText(this@MainActivity, "No simulation file yet", Toast.LENGTH_SHORT).show()
-            else exportFile(file)
-        })
-        demoRecordButton = setupNext
-        demoStatus = heading("DEMO ONLY  •  Synthetic observations never enter live surveys", 14f, muted)
-        wizard.addView(demoStatus)
-        demoStatus.visibility = android.view.View.GONE
-        toolsCard.addView(action("Developer diagnostics") {
-            testCard.visibility = if (testCard.visibility == android.view.View.VISIBLE) android.view.View.GONE else android.view.View.VISIBLE
-        })
-        updateDemoUi()
-        legacyPanel = layout
-        // Keep the original diagnostic widgets initialized but off-screen.
-        // A single navigation host owns all visible destinations.
-        val navHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(navy) }
-        val top = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 20, 24, 12)
-            setBackgroundColor(navy)
-        }
-        top.addView(heading("TRIDRONE", 25f, Color.WHITE).apply { setTypeface(null, Typeface.BOLD) })
-        top.addView(heading("HYDROGRAPHIC FIELD SYSTEM", 12f, muted))
-        val tabBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setBackgroundColor(panel) }
-        val pages = listOf("Survey", "Sessions", "Equipment", "Settings")
-        val tabButtons = mutableListOf<Button>()
-        val pageScroll = ScrollView(this).apply { isFillViewport = true }
-        val pageHost = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(20, 20, 20, 28)
-        }
-        pageScroll.addView(pageHost)
-        val surveyPage = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val sessionsPage = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val equipmentPage = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val settingsPage = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val destinations = listOf(surveyPage, sessionsPage, equipmentPage, settingsPage)
-        fun selectPage(index: Int) {
-            pageHost.removeAllViews()
-            val selected = destinations[index]
+        val root = column().apply { setBackgroundColor(navy) }
+        root.addView(text("TRIDRONE", 26f).apply { setTypeface(null, Typeface.BOLD); setPadding(dp(16), dp(18), dp(16), dp(8)) })
+        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setBackgroundColor(panel) }
+        val scroll = ScrollView(this).apply { isFillViewport = true }
+        val host = column().apply { setPadding(dp(14), dp(16), dp(14), dp(20)) }
+        scroll.addView(host)
+        val survey = column()
+        val sessions = column()
+        val equipment = column()
+        val settings = column()
+        val pages = listOf(survey, sessions, equipment, settings)
+        val buttons = mutableListOf<Button>()
+        fun selectPage(index: Int, focus: View? = null) {
+            host.removeAllViews()
+            val selected = pages[index]
             (selected.parent as? android.view.ViewGroup)?.removeView(selected)
-            pageHost.addView(selected)
-            pageScroll.scrollTo(0, 0)
-            tabButtons.forEachIndexed { i, button ->
+            host.addView(selected)
+            buttons.forEachIndexed { i, button ->
                 button.setTextColor(if (i == index) cyan else muted)
                 button.setBackgroundColor(if (i == index) navy else panel)
             }
+            scroll.post { scroll.smoothScrollTo(0, focus?.top ?: 0); focus?.requestFocus() }
         }
-        pages.forEachIndexed { index, name ->
-            val tab = Button(this).apply {
-                text = name
-                isAllCaps = false
-                textSize = 12f
-                minWidth = 0
-                minimumWidth = 0
-                setPadding(0, 8, 0, 8)
-                setOnClickListener { selectPage(index) }
+        listOf("Survey", "Sessions", "Equipment", "Project Setup").forEachIndexed { index, title ->
+            val button = action(title) { selectPage(index) }.apply {
+                textSize = 12f; minWidth = 0; minimumWidth = 0; setPadding(0, dp(8), 0, dp(8))
             }
-            tabButtons.add(tab)
-            tabBar.addView(tab, LinearLayout.LayoutParams(0, -2, 1f))
+            buttons.add(button); tabs.addView(button, LinearLayout.LayoutParams(0, -2, 1f))
         }
-        surveyPage.addView(heading("FIELD OPERATIONS", 12f, cyan))
-        surveyPage.addView(heading("Ready to collect?", 22f).apply { setTypeface(null, Typeface.BOLD) })
-        surveySummary = heading("GNSS  •  Awaiting receiver\nSOUNDER  •  Not verified", 15f, Color.WHITE)
-        surveySummary.setPadding(18, 18, 18, 18)
-        surveySummary.setBackgroundColor(panel)
-        surveyPage.addView(surveySummary)
-        surveyPage.addView(action("Connect & check equipment  →") { selectPage(2) })
-        surveyPage.addView(action("Review previous sessions  →") { selectPage(1) })
-        surveyPage.addView(heading("Connect both sensors before recording. Live survey collection remains locked until hardware validation.", 14f, muted))
-        (modeLabel.parent as? android.view.ViewGroup)?.removeView(modeLabel)
-        surveyPage.addView(modeLabel)
-        (modeSwitch.parent as? android.view.ViewGroup)?.removeView(modeSwitch)
-        surveyPage.addView(modeSwitch)
-        (captureCard.parent as? android.view.ViewGroup)?.removeView(captureCard)
-        surveyPage.addView(captureCard)
-        (demoStatus.parent as? android.view.ViewGroup)?.removeView(demoStatus)
-        surveyPage.addView(demoStatus)
-        sessionsPage.addView(heading("SESSIONS", 12f, cyan))
-        sessionsPage.addView(heading("Review & export", 22f))
-        (reviewCard.parent as? android.view.ViewGroup)?.removeView(reviewCard)
-        sessionsPage.addView(reviewCard)
-        equipmentPage.addView(heading("EQUIPMENT", 12f, cyan))
-        equipmentPage.addView(heading("Connections & diagnostics", 22f))
-        (gnssCard.parent as? android.view.ViewGroup)?.removeView(gnssCard)
-        equipmentPage.addView(gnssCard)
-        (sounderCard.parent as? android.view.ViewGroup)?.removeView(sounderCard)
-        equipmentPage.addView(sounderCard)
-        settingsPage.addView(heading("SETTINGS", 12f, cyan))
-        settingsPage.addView(heading("Preferences & tools", 22f))
-        (toolsCard.parent as? android.view.ViewGroup)?.removeView(toolsCard)
-        settingsPage.addView(toolsCard)
-        (testCard.parent as? android.view.ViewGroup)?.removeView(testCard)
-        settingsPage.addView(testCard)
-        navHost.addView(top)
-        navHost.addView(tabBar)
-        navHost.addView(pageScroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        selectPage(0)
-        setContentView(navHost)
+        val gnssCard = card("GNSS · Reach RS2+")
+        gnssStatus = text("Connect the receiver to continue.", 16f, muted)
+        gnssCard.addView(gnssStatus)
+        gnssCard.addView(action("Connect via Wi-Fi NMEA") { showWifiRtkSetup() })
+        gnssCard.addView(action("Use paired Bluetooth instead") { connectRtk() })
+        gnssCard.addView(action("Disconnect GNSS") {
+            stopService(Intent(this, WifiRtkService::class.java)); stopService(Intent(this, RtkService::class.java))
+        })
+        gnssCard.addView(text("Use the RS2+ NMEA TCP server on a shared Wi-Fi network. The receiver must output GGA and GST. A network link alone does not validate a fix.", 14f, muted))
+        gnssCard.addView(action("Open Android Wi-Fi settings") { startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)) })
+        gnssCard.addView(action("GNSS diagnostic track") { showLiveRtkMap() })
+        equipment.addView(gnssCard)
+        val depthCard = card("DEPTH · HydroLite Plus")
+        depthStatus = text("No verified real depth stream.", 16f, muted)
+        depthCard.addView(depthStatus)
+        depthCard.addView(action("Pair / inspect HydroLite") { showSounderDiagnostics() })
+        depthCard.addView(text("Confirm the supported interface with the hardware supplier. Paired Bluetooth and raw bytes do not prove valid depth observations.", 14f, muted))
+        equipment.addView(depthCard)
+        val collectionCard = card("Collection preflight")
+        recordingStatus = text("Recording unavailable.", 16f, muted)
+        collectionCard.addView(recordingStatus)
+        equipment.addView(collectionCard)
+        fun lamp(title: String, click: () -> Unit) = action(title, click).apply {
+            textSize = 22f; setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE)
+            minHeight = dp(92); minimumHeight = dp(92)
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) }
+        }
+        gnssLamp = lamp("GNSS · DISCONNECTED") { selectPage(2, gnssCard) }
+        depthLamp = lamp("DEPTH · DISCONNECTED") { selectPage(2, depthCard) }
+        collectionLamp = lamp("COLLECTION · UNAVAILABLE") { selectPage(2, collectionCard) }
+        survey.addView(gnssLamp); survey.addView(depthLamp); survey.addView(collectionLamp)
+        precision = text("H PRECISION  UNAVAILABLE\nV PRECISION  UNAVAILABLE", 22f).apply {
+            setTypeface(null, Typeface.BOLD); setBackgroundColor(panel); setPadding(dp(14), dp(18), dp(14), dp(18))
+        }
+        survey.addView(precision)
+        survey.addView(text("Emlid RS2+ receiver-reported GST · 1σ\nNot independently verified survey accuracy.", 14f, muted))
+        sessions.addView(text("Saved records", 23f))
+        sessions.addView(action("Review saved observations") { showSavedSurveys() })
+        sessions.addView(action("Export raw acquisition files") { showRawFiles() })
+        if (sessionsRepository.list(SessionRepository.Kind.DEMO).isNotEmpty()) {
+            sessions.addView(action("Review historical synthetic test records") { showSavedSurveys(SessionRepository.Kind.DEMO) })
+        }
+        sessions.addView(text("Existing records retain their original source and limitations. GNSS acquisition is not synchronized bathymetric collection.", 14f, muted))
+        settings.addView(text("Project Setup", 23f))
+        settingsStatus = text("", 16f, muted); settings.addView(settingsStatus)
+        settings.addView(action("Edit job, next session & coordinate systems") { showSurveySettings() })
+        settings.addView(action("Check for app updates") { AppUpdater.open(this) })
+        root.addView(tabs); root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
+        setContentView(root); selectPage(0); updateDisplay()
     }
     override fun onResume() {
-        super.onResume()
-        handler.removeCallbacks(refresh)
-        handler.post(refresh)
-        startPreview()
+        super.onResume(); handler.removeCallbacks(refresh); handler.post(refresh)
+        dialogRefreshes.forEach { handler.removeCallbacks(it); handler.post(it) }
     }
     override fun onPause() {
-        handler.removeCallbacks(refresh)
-        if (::locationManager.isInitialized) locationManager.removeUpdates(this)
-        super.onPause()
+        handler.removeCallbacks(refresh); dialogRefreshes.forEach { handler.removeCallbacks(it) }; super.onPause()
     }
-    override fun onLocationChanged(location: Location) { previewFix = location }
-    private fun startPreview() {
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 51)
-            return
+    private fun updateDisplay() {
+        val prefs = getSharedPreferences("rtk_status", MODE_PRIVATE)
+        val sounder = getSharedPreferences("sounder_diagnostics", MODE_PRIVATE)
+        val storedState = prefs.getString("state", "disconnected").orEmpty()
+        val state = if (GnssConnectionOwner.active()) storedState else if (storedState == "error") "error" else "disconnected"
+        val now = SystemClock.elapsedRealtime()
+        val display = OperatorReadiness.evaluate(OperatorReadiness.State(
+            receiverState = state,
+            fixQuality = prefs.getString("quality", null),
+            fixAgeMs = ConnectionPolicy.age(now, prefs.getLong("last_fix_elapsed_ms", 0L)),
+            sounderState = if (SounderDiagnosticService.active()) sounder.getString("state", "disconnected").orEmpty()
+                else if (sounder.getString("state", "") == "error") "error" else "disconnected",
+            horizontalMeters = prefs.getString("h_sigma_m", null)?.toDoubleOrNull(),
+            verticalMeters = prefs.getString("v_sigma_m", null)?.toDoubleOrNull(),
+            gstAgeMs = ConnectionPolicy.age(now, prefs.getLong("gst_elapsed_ms", 0L)),
+            correctionAgeSeconds = prefs.getString("correction_age_s", null)?.toDoubleOrNull(),
+            precisionEpochAligned = NmeaEpoch.aligned(prefs.getString("gga_epoch", null)?.toDoubleOrNull(), prefs.getString("gst_epoch", null)?.toDoubleOrNull())
+        ))
+        fun render(button: Button, title: String, lamp: OperatorReadiness.Lamp) {
+            button.text = title
+            val color = when (lamp) {
+                OperatorReadiness.Lamp.RED -> Color.rgb(145, 35, 35)
+                OperatorReadiness.Lamp.AMBER -> Color.rgb(145, 91, 8)
+                OperatorReadiness.Lamp.GREEN -> Color.rgb(12, 111, 53)
+            }
+            button.setBackgroundColor(color); button.elevation = dp(if (lamp == OperatorReadiness.Lamp.GREEN) 10 else 6).toFloat()
+            button.contentDescription = title
         }
-        try {
-            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, this, Looper.getMainLooper())
-        } catch (_: Exception) {}
-    }
-    private fun updateGnssPreview() {
-        val r = getSharedPreferences("rtk_status", MODE_PRIVATE)
-        val age = System.currentTimeMillis() - r.getLong("last_fix_ms", 0L)
-        val fresh = r.getString("state", "") == "connected" && age in 0..5000
-        val quality = if (fresh) r.getString("quality", "") else ""
-        val state = when {
-            quality == "4" -> "RTK FIX"
-            quality == "5" -> "RTK FLOAT"
-            fresh -> "RS2+ • NOT FIXED"
-            else -> "NOT CONNECTED"
-        }
-        gpsBar.text = "●  REACH RS2+  •  $state"
-        gpsBar.setBackgroundColor(when (state) {
-            "RTK FIX" -> Color.rgb(21, 119, 78)
-            "RTK FLOAT" -> Color.rgb(172, 109, 19)
-            else -> Color.rgb(124, 56, 56)
-        })
-        val gstFresh = fresh && (System.currentTimeMillis() - r.getLong("gst_received_ms", 0L)) in 0..5000
-        val hSigma = if (gstFresh) r.getString("h_sigma_m", null)?.toDoubleOrNull() else null
-        val vSigma = if (gstFresh) r.getString("v_sigma_m", null)?.toDoubleOrNull() else null
-        val h = if (hSigma != null) String.format(Locale.US, "%.3f m • RS2+ GST 1σ", hSigma)
-            else if (fresh) "Unavailable (enable GST output)"
-            else "Unavailable"
-        val v = if (vSigma != null) String.format(Locale.US, "%.3f m • RS2+ GST 1σ", vSigma)
-            else if (fresh) "Unavailable (enable GST output)"
-            else "Unavailable"
-        gpsMetrics.text = "Receiver horizontal precision: $h\nReceiver vertical precision: $v\n" +
-            (if (fresh) "RS2+ satellites: " + r.getString("satellites", "—") + " • HDOP: " + r.getString("hdop", "—") else "Awaiting external RTK")
-    }
-    private fun startSimulation() {
-        if (simulationActive) return
-        val p = getSharedPreferences("rtk_status", MODE_PRIVATE)
-        if (p.getString("state", "") != "connected" || System.currentTimeMillis() - p.getLong("last_fix_ms", 0L) !in 0..3000) {
-            Toast.makeText(this, "Connect live Emlid NMEA first", Toast.LENGTH_LONG).show()
-            return
-        }
-        try {
-            val folder = File(filesDir, "surveys").apply { mkdirs() }
-            val file = File(folder, "SIMULATED_DEPTH_${System.currentTimeMillis()}.csv")
-            simulationWriter = file.bufferedWriter()
-            simulationWriter?.write("event_utc_ms,gnss_received_utc_ms,latitude_deg,longitude_deg,gga_quality,simulated_depth_m,gnss_flag,data_source,offset_status,vertical_status\\n")
-            simulationWriter?.flush()
-            simulationFile = file
-            simulationCount = 0
-            simulationActive = true
-            simulationStatus.text = "SIMULATION RUNNING • NOT SURVEY DATA"
-            handler.post(simulationTick)
-        } catch (e: Exception) {
-            stopSimulation()
-            Toast.makeText(this, "Cannot start simulation: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-    private fun stopSimulation() {
-        simulationActive = false
-        handler.removeCallbacks(simulationTick)
-        try { simulationWriter?.close() } catch (_: Exception) {}
-        simulationWriter = null
-        if (::simulationStatus.isInitialized) simulationStatus.text = "Simulation stopped • $simulationCount test events"
-    }
-    override fun onDestroy() {
-        stopSimulation()
-        stopDemoRecording()
-        handler.removeCallbacks(refresh)
-        super.onDestroy()
+        render(gnssLamp, "GNSS · ${display.gnssLabel}", display.gnssLamp)
+        render(depthLamp, "DEPTH · ${display.depthLabel}", display.depthLamp)
+        render(collectionLamp, "COLLECTION · ${display.collectionLabel}", display.collectionLamp)
+        val config = SurveyConfig.load(this)
+        precision.text = "H PRECISION  ${DisplayUnits.formatPrecision(display.horizontalMeters, config.units)}\n" +
+            "V PRECISION  ${DisplayUnits.formatPrecision(display.verticalMeters, config.units)}"
+        gnssStatus.text = display.gnss + "\n" + prefs.getString("detail", "").orEmpty() +
+            "\nNMEA: ${prefs.getInt("sentences", 0)} · GGA: ${prefs.getInt("fixes", 0)}"
+        depthStatus.text = display.sounder
+        recordingStatus.text = display.recording + "\nNext session: ${config.sessionName.ifBlank { "Not named" }} · set in Project Setup"
+        settingsStatus.text = "Job: ${config.project.ifBlank { "Not named" }}\nNext session: ${config.sessionName.ifBlank { "Not named" }}\n" +
+            "Display units: ${DisplayUnits.label(config.units)}\nHorizontal: ${config.horizontal}\nVertical: ${config.vertical}\nSource datum: ${config.source}\n\n" +
+            "Display units do not change the selected CRS units or raw observations. Setup changes apply to future sessions; existing snapshots stay unchanged.\n" +
+            "Projected coordinates and bottom elevations require verified transformations and vertical control."
     }
     private fun showSurveySettings() {
         val current = SurveyConfig.load(this)
         val container = ScrollView(this)
         val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 20, 28, 20) }
-        fun heading(t: String) { form.addView(TextView(this).apply { text = t; textSize = 16f; setPadding(0, 14, 0, 8) }) }
-        heading("Project name (optional)")
-        val project = EditText(this).apply { setSingleLine(); setText(current.project); hint = "Survey project" }
+        fun heading(t: String) { form.addView(TextView(this).apply { text = t; textSize = 16f; setPadding(0, dp(12), 0, dp(8)) }) }
+        fun selection(title: String, choices: List<Pair<String, String>>, selected: String): Pair<Spinner, List<Pair<String, String>>> {
+            heading(title)
+            // Unknown historical settings remain explicit and unchanged until the owner selects a supported option.
+            val options = if (choices.any { it.first == selected }) choices else choices + (selected to "$selected — stored value; support unverified")
+            val spinner = Spinner(this).apply {
+                minimumHeight = dp(48)
+                adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, options.map { it.second })
+                setSelection(options.indexOfFirst { it.first == selected })
+            }
+            form.addView(spinner)
+            return spinner to options
+        }
+        heading("Job / project name")
+        val project = EditText(this).apply {
+            setSingleLine(); setText(current.project); hint = "Job or project"; minimumHeight = dp(48)
+            filters = arrayOf(android.text.InputFilter.LengthFilter(120))
+        }
         form.addView(project)
-        heading("Horizontal output coordinate system")
-        val horizontal = Spinner(this)
-        val options = listOf("EPSG:6539 — NAD83(2011) NY Long Island ftUS", "EPSG:4326 — WGS 84 geographic")
-        horizontal.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, options)
-        horizontal.setSelection(if (current.horizontal == "EPSG:4326") 1 else 0)
-        form.addView(horizontal)
+        heading("Next collection session name — separate from job")
+        val session = EditText(this).apply {
+            setSingleLine(); setText(current.sessionName); hint = "e.g. Shoreline transect 01"; minimumHeight = dp(48)
+            filters = arrayOf(android.text.InputFilter.LengthFilter(120))
+        }
+        form.addView(session)
+        form.addView(TextView(this).apply {
+            text = "Names the next acquisition record, not the active session. Current recording is receiver diagnostics; synchronized GNSS/depth collection remains unavailable."
+        })
+        val (horizontal, horizontalOptions) = selection("Horizontal coordinate system", listOf(
+            "EPSG:6539" to "EPSG:6539 — NAD83(2011) / New York Long Island, US survey feet",
+            "EPSG:4326" to "EPSG:4326 — WGS 84 geographic, degrees"
+        ), current.horizontal)
         heading("Favorites")
         val favorite = CheckBox(this).apply { text = "Favorite selected horizontal CRS"; isChecked = current.horizontal in current.favorites }
         form.addView(favorite)
-        heading("Vertical reference")
-        form.addView(TextView(this).apply { text = "EPSG:6360 — NAVD88, US survey feet (configuration only; no elevations without vertical control)" })
-        heading("Display units")
-        val units = Spinner(this)
-        units.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("US survey feet", "Meters"))
-        units.setSelection(if (current.units == "m") 1 else 0)
-        form.addView(units)
-        heading("Source geodetic datum (verify receiver output)")
-        val source = Spinner(this)
-        source.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
-            listOf("UNKNOWN — preserve raw, no projected output", "EPSG:6318 — NAD83(2011), independently verified"))
-        source.setSelection(if (current.source == "EPSG:6318") 1 else 0)
-        form.addView(source)
+        val (vertical, verticalOptions) = selection("Vertical coordinate system / datum", listOf(
+            "EPSG:6360" to "EPSG:6360 — NAVD88 height, US survey feet (configuration only)"
+        ), current.vertical)
+        val unitChoices = listOf("usft" to "US survey feet (ftUS) — 1200/3937 meter", "ift" to "International feet (ft) — 0.3048 meter", "m" to "Meters (m)") +
+            if (current.units == "ft") listOf("ft" to "International feet (ft) — legacy setting, 0.3048 meter") else emptyList()
+        val (units, unitOptions) = selection("Precision display units — separate from CRS units", unitChoices, current.units)
+        val (source, sourceOptions) = selection("Source geodetic datum — verify receiver output", listOf(
+            "UNKNOWN" to "UNKNOWN — preserve raw, no projected output",
+            "EPSG:6318" to "EPSG:6318 — NAD83(2011), owner verified"
+        ), current.source)
         form.addView(TextView(this).apply {
-            text = "Selecting EPSG:6318 is an assertion about the incoming receiver coordinates, NOT an automatic transformation. Verify receiver configuration, datum realization/epoch and independent control. Android phone GPS remains unverified. No WGS84-to-NAD83(2011) datum operation is installed."
+            text = "Receiver GST is retained in native meters. Display conversions do not alter observations or CRS units. Selecting a CRS/datum does not validate a transformation or supply vertical corrections. Verify receiver datum, epoch and independent control. NAVD88 bottom elevations remain unavailable."
             setPadding(0, 20, 0, 12)
         })
         container.addView(form)
-        android.app.AlertDialog.Builder(this).setTitle("Survey settings").setView(container)
+        android.app.AlertDialog.Builder(this).setTitle("Project Setup").setView(container)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Save") { _, _ ->
-                val horizontalCode = if (horizontal.selectedItemPosition == 0) "EPSG:6539" else "EPSG:4326"
+                val horizontalCode = horizontalOptions[horizontal.selectedItemPosition].first
                 val favorites = current.favorites.toMutableSet()
                 if (favorite.isChecked) favorites.add(horizontalCode) else favorites.remove(horizontalCode)
-                SurveyConfig.save(this, SurveySettings(project.text.toString().trim(), horizontalCode,
-                    "EPSG:6360", if (units.selectedItemPosition == 0) "usft" else "m",
-                    if (source.selectedItemPosition == 0) "UNKNOWN" else "EPSG:6318", favorites))
-                crsSpinner.setSelection(horizontal.selectedItemPosition)
-                Toast.makeText(this, "Settings saved; new sessions capture metadata", Toast.LENGTH_LONG).show()
+                SurveyConfig.save(this, current.copy(project = project.text.toString(), sessionName = session.text.toString(),
+                    horizontal = horizontalCode, vertical = verticalOptions[vertical.selectedItemPosition].first,
+                    units = unitOptions[units.selectedItemPosition].first, source = sourceOptions[source.selectedItemPosition].first,
+                    favorites = favorites))
+                updateDisplay()
+                Toast.makeText(this, "Project Setup saved for future sessions; existing records unchanged", Toast.LENGTH_LONG).show()
             }.show()
     }
     private fun showWifiRtkSetup() {
@@ -609,14 +262,16 @@ class MainActivity : Activity(), LocationListener {
             setPadding(28, 12, 28, 12)
         }
         form.addView(TextView(this).apply {
-            text = "Connect the Reach to the phone hotspot and configure a TCP NMEA server on the receiver. Enter its hotspot IP and NMEA TCP port."
+            text = "Put the phone and RS2+ on the same Wi-Fi network (receiver network or a configured hotspot). Enable the receiver NMEA TCP server with GGA and GST. Enter the receiver IPv4 address and TCP port."
         })
         val host = EditText(this).apply {
             setSingleLine(); hint = "Receiver IP address"
+            minimumHeight = dp(48)
             setText(prefs.getString("host", ""))
         }
         val port = EditText(this).apply {
             setSingleLine(); hint = "NMEA TCP port"
+            minimumHeight = dp(48)
             inputType = android.text.InputType.TYPE_CLASS_NUMBER
             setText(prefs.getInt("port", 0).takeIf { it > 0 }?.toString() ?: "")
         }
@@ -630,21 +285,20 @@ class MainActivity : Activity(), LocationListener {
             .setPositiveButton("Connect") { _, _ ->
                 val h = host.text.toString().trim()
                 val p = port.text.toString().toIntOrNull()
-                if (h.isBlank() || p == null || p !in 1..65535) {
+                if (!ConnectionProfile.validIpv4(h) || p == null || p !in 1..65535) {
                     Toast.makeText(this, "Enter a receiver IP and TCP port", Toast.LENGTH_LONG).show()
                 } else {
-                    prefs.edit().putString("host", h).putInt("port", p).apply()
                     stopService(Intent(this, RtkService::class.java))
-                    startForegroundService(Intent(this, WifiRtkService::class.java)
-                        .putExtra("host", h).putExtra("port", p))
+                    try {
+                        startForegroundService(Intent(this, WifiRtkService::class.java)
+                            .putExtra("host", h).putExtra("port", p))
+                    } catch (_: Exception) {
+                        Toast.makeText(this, "Unable to start GNSS. Check Android permissions and try again.", Toast.LENGTH_LONG).show()
+                    }
                 }
             }.show()
     }
     private fun showSounderDiagnostics() {
-        if (demoMode) {
-            Toast.makeText(this, "Sounder diagnostics are available in Live mode only", Toast.LENGTH_LONG).show()
-            return
-        }
         if (Build.VERSION.SDK_INT >= 31 &&
             checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 43)
@@ -657,9 +311,9 @@ class MainActivity : Activity(), LocationListener {
         }
         val info = TextView(this).apply { textSize = 14f; setTextIsSelectable(true) }
         panel.addView(info)
-        val connect = Button(this).apply { text = "Connect paired sounder" }
-        val stop = Button(this).apply { text = "Stop diagnostic capture" }
-        val share = Button(this).apply { text = "Share raw capture" }
+        val connect = action("Connect paired sounder") {}
+        val stop = action("Stop diagnostic capture") {}
+        val share = action("Share raw capture") {}
         panel.addView(connect)
         panel.addView(stop)
         panel.addView(share)
@@ -669,7 +323,9 @@ class MainActivity : Activity(), LocationListener {
         val tick = object : Runnable {
             override fun run() {
                 if (!dialog.isShowing) return
-                info.text = "State: ${prefs.getString("state", "disconnected")}\n" +
+                val stored = prefs.getString("state", "disconnected").orEmpty()
+                val state = if (SounderDiagnosticService.active()) stored else if (stored == "error") "error" else "disconnected"
+                info.text = "State: $state\n" +
                     "Detail: ${prefs.getString("detail", "")}\n" +
                     "Bytes: ${prefs.getLong("bytes", 0L)}\n" +
                     "ASCII frames: ${prefs.getInt("frames", 0)}\n" +
@@ -726,8 +382,8 @@ class MainActivity : Activity(), LocationListener {
                 }
             }
         }
-        dialog.setOnShowListener { handler.post(tick) }
-        dialog.setOnDismissListener { handler.removeCallbacks(tick) }
+        dialog.setOnShowListener { dialogRefreshes.add(tick); handler.post(tick) }
+        dialog.setOnDismissListener { dialogRefreshes.remove(tick); handler.removeCallbacks(tick) }
         dialog.show()
     }
 
@@ -752,6 +408,7 @@ class MainActivity : Activity(), LocationListener {
             val labels = devices.map { (it.name ?: "Unknown") + " (" + it.address + ")" }.toTypedArray()
             android.app.AlertDialog.Builder(this).setTitle("Select paired RTK receiver")
                 .setItems(labels) { _, i ->
+                    stopService(Intent(this, WifiRtkService::class.java))
                     val intent = Intent(this, RtkService::class.java).putExtra("address", devices[i].address)
                     try { startForegroundService(intent) }
                     catch (e: Exception) { Toast.makeText(this, "RTK start failed: " + e.message, Toast.LENGTH_LONG).show() }
@@ -759,89 +416,6 @@ class MainActivity : Activity(), LocationListener {
         } catch (e: Exception) {
             Toast.makeText(this, "Bluetooth error: " + e.message, Toast.LENGTH_LONG).show()
         }
-    }
-    private fun latest(): File? = sessionsRepository.latest(SessionRepository.Kind.LIVE)
-    private fun updateDisplay() {
-        updateGnssPreview()
-        val gnss = getSharedPreferences("rtk_status", MODE_PRIVATE)
-        val fixAge = System.currentTimeMillis() - gnss.getLong("last_fix_ms", 0L)
-        val live = gnss.getString("state", "") == "connected" && fixAge in 0..5000
-        val fixType = when (gnss.getString("quality", "")) {
-            "4" -> "RTK FIX"
-            "5" -> "RTK FLOAT"
-            else -> "NO RTK FIX"
-        }
-        setupStatus.text = "GNSS: " + (gnss.getString("state", "disconnected") ?: "disconnected") +
-            (if (live) "  •  $fixType" else "  •  awaiting live GGA") +
-            "\\n" + (gnss.getString("detail", "") ?: "") +
-            "\\nGGA: " + gnss.getInt("fixes", 0)
-        if (::surveySummary.isInitialized) {
-            val diagnostic = getSharedPreferences("sounder_diagnostics", MODE_PRIVATE)
-            val depthState = diagnostic.getString("state", "disconnected")
-            surveySummary.text = if (demoMode) {
-                "GNSS  •  " + (if (demoGnss) "Demo connected" else "Connect demo GNSS") +
-                    "\\nSOUNDER  •  " + (if (demoSounder) "Demo connected" else "Connect demo sounder") +
-                    "\\nMODE  •  Synthetic observations only"
-            } else {
-                "GNSS  •  " + (if (live) fixType else "No live receiver fix") +
-                    "\\nSOUNDER  •  " + (if (depthState == "connected") "Diagnostic connection only" else "Not connected") +
-                    "\\nCOLLECTION  •  Awaiting hardware validation"
-            }
-        }
-        setupSounder.alpha = if (live) 1f else 0.65f
-        if (demoMode) { updateDemoUi() }
-        val rt = getSharedPreferences("rtk_status", MODE_PRIVATE)
-        val rtAge = System.currentTimeMillis() - rt.getLong("last_fix_ms", 0L)
-        val fixed = rt.getString("state", "") == "connected" && rt.getString("quality", "") == "4" && rtAge in 0..5000
-        readiness.text = "SURVEY READINESS • NOT READY\n" +
-            (if (fixed) "RTK FIX live" else "RTK FIX required") +
-            "\nSensor offsets not configured" +
-            "\nHydroLite depth unavailable" +
-            "\nSynchronized capture not implemented"
-        sounderStatus.text = "Disconnected • Depth unavailable"
-        if (demoMode) updateDemoUi()
-        val rp = getSharedPreferences("rtk_status", MODE_PRIVATE)
-        val rtkAge = (System.currentTimeMillis() - rp.getLong("last_fix_ms", 0L)) / 1000
-        val quality = rp.getString("quality", "?") ?: "?"
-        val fixLabel = when(quality) { "4" -> "RTK FIX"; "5" -> "RTK FLOAT"; "2" -> "DGPS"; "1" -> "SINGLE"; "0" -> "INVALID"; else -> "UNKNOWN" }
-        rtkStatus.text = "RTK: " + rp.getString("state", "disconnected") + " • " + rp.getString("detail", "") +
-            "\nFix: " + fixLabel + " • Satellites: " + rp.getString("satellites", "—") +
-            " • NMEA: " + rp.getInt("sentences", 0) + " • GGA: " + rp.getInt("fixes", 0) +
-            (if (rp.getLong("last_fix_ms", 0L) > 0) " • Last GGA: " + rtkAge + "s ago" else "")
-        val p = getSharedPreferences("logger_status", MODE_PRIVATE)
-        val state = p.getString("state", "idle") ?: "idle"
-        val count = p.getInt("points", 0)
-        val started = p.getLong("started_at_ms", 0L)
-        val active = state == "recording" || state == "waiting"
-        val ended = if (active) System.currentTimeMillis() else p.getLong("stopped_at_ms", System.currentTimeMillis())
-        val seconds = if (started > 0L) ((ended - started).coerceAtLeast(0L) / 1000L) else 0L
-        timing.text = if (started > 0L) "Started " + DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(started)) +
-            "  |  Elapsed " + String.format(Locale.US, "%02d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
-            else "Survey not started"
-        val fix = p.getLong("last_fix_ms", 0L)
-        val age = if (fix > 0L) (System.currentTimeMillis() - fix).coerceAtLeast(0L) / 1000L else -1L
-        lastFix.text = if (age < 0) "Last fix: none" else "Last fix: " + age + " seconds ago" + if (age > 10L) " (STALE)" else ""
-        status.text = when(state) {
-            "recording" -> "RECORDING • $count GPS points"
-            "waiting" -> "WAITING FOR GPS FIX • $count points"
-            "error" -> "ERROR: " + p.getString("error", "unknown")
-            else -> "Not recording"
-        }
-        val lat = p.getString("lat", null)
-        val lon = p.getString("lon", null)
-        val accuracy = p.getFloat("accuracy", -1f)
-        precision.text = if (accuracy < 0f) "Horizontal accuracy: unavailable" else
-            "Horizontal accuracy: " + String.format(Locale.US, "%.1f m  |  %.1f ft", accuracy, accuracy * 3.280839895) +
-            "  (phone estimate)"
-        val selectedCrs = SurveyConfig.load(this).horizontal
-        details.text = if (lat != null && lon != null) {
-            "Latitude: $lat\nLongitude: $lon\nHorizontal accuracy: " +
-                (if (accuracy >= 0) String.format(Locale.US, "%.1f m", accuracy) else "Unknown") +
-                "\nSession points: $count"
-        } else "No GPS fix yet. Try outdoors when convenient.\nSession points: $count"
-        val file = latest()
-        sessions.text = if (file == null) "No CSV session found" else
-            "${file.name}\n${file.length()} bytes"
     }
     private fun showLiveRtkMap() {
         val map = SurveyMapView(this)
@@ -867,11 +441,11 @@ class MainActivity : Activity(), LocationListener {
                 if (!dialog.isShowing) return
                 val p = getSharedPreferences("rtk_status", MODE_PRIVATE)
                 val timestamp = p.getLong("last_fix_ms", 0L)
-                val age = System.currentTimeMillis() - timestamp
+                val age = ConnectionPolicy.age(SystemClock.elapsedRealtime(), p.getLong("last_fix_elapsed_ms", 0L))
                 val lat = p.getString("lat", null)?.toDoubleOrNull()
                 val lon = p.getString("lon", null)?.toDoubleOrNull()
-                val valid = p.getString("state", "") == "connected" &&
-                    age in 0..5000 && lat != null && lon != null &&
+                val valid = GnssConnectionOwner.active() && p.getString("state", "") == "connected" &&
+                    ConnectionPolicy.fresh(age) && lat != null && lon != null &&
                     lat in -90.0..90.0 && lon in -180.0..180.0
                 val quality = when (p.getString("quality", "")) {
                     "4" -> "RTK FIX"
@@ -893,115 +467,24 @@ class MainActivity : Activity(), LocationListener {
                 }
                 statusLabel.text = "Emlid RS2+ • " +
                     (if (valid) quality else "STREAM STALE / DISCONNECTED") +
-                    "\\nTrack positions: ${track.size} • Satellites: " +
+                    "\nTrack positions: ${track.size} • Satellites: " +
                     p.getString("satellites", "—") +
-                    "\\nLive preview only • not saved as a survey"
+                    "\nLive preview only • not saved as a survey"
                 handler.postDelayed(this, 500L)
             }
         }
-        dialog.setOnShowListener { handler.post(ticker) }
-        dialog.setOnDismissListener { handler.removeCallbacks(ticker) }
+        dialog.setOnShowListener { dialogRefreshes.add(ticker); handler.post(ticker) }
+        dialog.setOnDismissListener { dialogRefreshes.remove(ticker); handler.removeCallbacks(ticker) }
         dialog.show()
     }
-    private fun showDemoReview() {
-        val sessions = sessionsRepository.list(SessionRepository.Kind.DEMO)
+    private fun showSavedSurveys(kind: SessionRepository.Kind = SessionRepository.Kind.LIVE) {
+        val sessions = sessionsRepository.list(kind)
         if (sessions.isEmpty()) {
-            Toast.makeText(this, "No demo recordings yet. Start and stop a demo session first.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "No saved observation records", Toast.LENGTH_LONG).show()
             return
         }
-        val labels = sessions.map { "${it.file.name}  •  ${it.observations} observations" }.toTypedArray()
-        android.app.AlertDialog.Builder(this).setTitle("DEMO sessions — synthetic only")
-            .setItems(labels) { _, index -> showDemoSession(sessions[index]) }
-            .setNegativeButton("Close", null).show()
-    }
-
-    private fun showDemoSession(session: SessionRepository.Session) {
-        val file = session.file
-        val samples = try {
-            sessionsRepository.read(session).mapNotNull { sample ->
-                sample.depthMeters?.let { Triple(sample.latitude, sample.longitude, it) }
-            }
-        } catch (e: Exception) {
-            Toast.makeText(this, "Invalid demo session: ${e.message}", Toast.LENGTH_LONG).show()
-            return
-        }
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(12, 12, 12, 12)
-        }
-        val minDepth = samples.minOfOrNull { it.third }
-        val maxDepth = samples.maxOfOrNull { it.third }
-        container.addView(TextView(this).apply {
-            text = "DEMO — SYNTHETIC DATA, NOT FOR SURVEY\n" +
-                "Observations: ${samples.size}\n" +
-                "Depth range: ${if (minDepth != null && maxDepth != null) String.format(Locale.US, "%.2f–%.2f m", minDepth, maxDepth) else "—"}"
-            textSize = 16f
-            setPadding(12, 12, 12, 12)
-        })
-        val map = SurveyMapView(this)
-        map.tracks = listOf(samples.map { Pair(it.first, it.second) })
-        map.current = null
-        container.addView(map, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.48f).toInt()))
-        container.addView(TextView(this).apply {
-            text = "First observations:\n" + samples.take(12).mapIndexed { i, p ->
-                String.format(Locale.US, "%d. %.6f, %.6f  •  %.2f m", i + 1, p.first, p.second, p.third)
-            }.joinToString("\n")
-            setPadding(12, 12, 12, 12)
-        })
-        android.app.AlertDialog.Builder(this).setTitle("Demo session review")
-            .setView(container)
-            .setNeutralButton("Export CSV") { _, _ -> exportFile(file) }
-            .setPositiveButton("Close", null).show()
-    }
-
-    private fun showSurveyMap() {
-        val sessions = sessionsRepository.list(SessionRepository.Kind.LIVE)
-        val tracks = sessions.map { session ->
-            try {
-                sessionsRepository.read(session).map { Pair(it.latitude, it.longitude) }
-            } catch (_: Exception) { emptyList<Pair<Double, Double>>() }
-        }
-        val view = SurveyMapView(this)
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val info = TextView(this).apply {
-            text = "All saved tracks: " + sessions.size + "  |  Recorded points: " + tracks.sumOf { it.size } +
-                "\nBlue: latest track  •  Gray: earlier tracks  •  Green: phone GPS position"
-            textSize = 14f
-            setPadding(20, 16, 20, 12)
-        }
-        box.addView(info)
-        box.addView(view, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.55f).toInt()))
-        view.tracks = tracks
-        fun refreshMap() {
-            val prefs = getSharedPreferences("logger_status", MODE_PRIVATE)
-            val lat = prefs.getString("lat", null)?.toDoubleOrNull()
-            val lon = prefs.getString("lon", null)?.toDoubleOrNull()
-            val age = System.currentTimeMillis() - prefs.getLong("last_fix_ms", 0L)
-            view.current = if (lat != null && lon != null && age in 0..10000) Pair(lat, lon) else null
-        }
-        refreshMap()
-        val dialog = android.app.AlertDialog.Builder(this).setTitle("Phone GPS diagnostic map")
-            .setView(box).setPositiveButton("Close", null).create()
-        val ticker = object : Runnable {
-            override fun run() {
-                if (dialog.isShowing) {
-                    refreshMap()
-                    handler.postDelayed(this, 1000)
-                }
-            }
-        }
-        dialog.setOnShowListener { handler.post(ticker) }
-        dialog.setOnDismissListener { handler.removeCallbacks(ticker) }
-        dialog.show()
-    }
-    private fun showSavedSurveys() {
-        val sessions = sessionsRepository.list(SessionRepository.Kind.LIVE)
-        if (sessions.isEmpty()) {
-            Toast.makeText(this, "No saved phone GPS sessions", Toast.LENGTH_LONG).show()
-            return
-        }
-        val labels = sessions.map { "${it.file.name}  |  ${it.observations} points" }.toTypedArray()
-        android.app.AlertDialog.Builder(this).setTitle("Phone GPS diagnostic sessions")
+        val labels = sessions.map { "${sessionsRepository.displayName(it)}  |  ${it.observations} points\n${it.file.name}" }.toTypedArray()
+        android.app.AlertDialog.Builder(this).setTitle(if (kind == SessionRepository.Kind.DEMO) "Historical synthetic test records" else "Saved observations")
             .setItems(labels) { _, index -> showSavedPoints(sessions[index]) }
             .setNegativeButton("Close", null).show()
     }
@@ -1015,40 +498,29 @@ class MainActivity : Activity(), LocationListener {
             view.addView(TextView(this).apply {
                 textSize = 15f
                 setPadding(28, 20, 28, 20)
-                text = session.file.name + "\nRecorded positions: ${points.size}\nPHONE GPS — NOT RTK OR BATHYMETRY\n\n" +
+                val source = when {
+                    session.kind == SessionRepository.Kind.DEMO -> "HISTORICAL SYNTHETIC TEST — NOT FOR SURVEY"
+                    session.file.name.startsWith("gps_") -> "HISTORICAL PHONE GPS — NOT RTK OR BATHYMETRY"
+                    else -> "RECEIVER GNSS OBSERVATIONS — NOT SYNCHRONIZED BATHYMETRY"
+                }
+                text = sessionsRepository.displayName(session) + "\n" + session.file.name + "\nRecorded positions: ${points.size}\n$source\n\n" +
                     body + if (points.size > 200) "\n…first 200 displayed" else ""
                 setTextIsSelectable(true)
             })
-            android.app.AlertDialog.Builder(this).setTitle("Recorded phone GPS positions")
+            android.app.AlertDialog.Builder(this).setTitle("Recorded observations")
                 .setView(view).setPositiveButton("Close", null)
                 .setNeutralButton("Export CSV") { _, _ -> exportFile(session.file) }.show()
         } catch (e: Exception) {
             Toast.makeText(this, "Cannot open CSV: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
-    private fun startSurvey() {
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), requestCode)
-            return
-        }
-        try {
-            startForegroundService(Intent(this, SurveyService::class.java))
-            status.text = "Starting logger..."
-        } catch (e: Exception) {
-            status.text = "Unable to start: ${e.message}"
-        }
-        if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 32)
-        }
-    }
-    private fun exportLatest() {
-        val file = latest()
-        if (file == null) {
-            Toast.makeText(this, "No survey CSV to export", Toast.LENGTH_LONG).show()
-            return
-        }
-        exportFile(file)
+    private fun showRawFiles() {
+        val files = sessionsRepository.artifacts()
+        if (files.isEmpty()) { Toast.makeText(this, "No raw acquisition files available", Toast.LENGTH_LONG).show(); return }
+        android.app.AlertDialog.Builder(this).setTitle("Raw observations and configuration snapshots")
+            .setItems(files.map { "${it.name} · ${it.length()} bytes" }.toTypedArray()) { _, index ->
+                exportFile(files[index])
+            }.setNegativeButton("Close", null).show()
     }
     private fun exportFile(file: File) {
         try {
@@ -1056,7 +528,11 @@ class MainActivity : Activity(), LocationListener {
             file.inputStream().use { input -> shareCopy.outputStream().use { output -> input.copyTo(output) } }
             val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", shareCopy)
             val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/csv"
+                type = when (file.extension.lowercase(Locale.US)) {
+                    "csv" -> "text/csv"
+                    "json" -> "application/json"
+                    else -> "application/octet-stream"
+                }
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
@@ -1067,11 +543,10 @@ class MainActivity : Activity(), LocationListener {
     }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, results: IntArray) {
         super.onRequestPermissionsResult(code, permissions, results)
-        if (code == 51 && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) startPreview()
-        if (code == 41 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) connectRtk()
-        if (code == requestCode) {
-            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) startSurvey()
-            else status.text = "Precise location permission required"
+        if (code == 41 || code == 43) {
+            if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                if (code == 41) connectRtk() else showSounderDiagnostics()
+            } else Toast.makeText(this, "Allow Nearby devices permission to connect paired equipment", Toast.LENGTH_LONG).show()
         }
     }
 }

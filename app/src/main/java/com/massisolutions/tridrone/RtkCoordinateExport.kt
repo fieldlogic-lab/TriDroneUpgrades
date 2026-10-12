@@ -1,8 +1,8 @@
 package com.massisolutions.tridrone
 
 /**
- * CSV projection output is explicitly provisional. Source coordinates must be confirmed
- * NAD83(2011) and independently checked before accepting a survey deliverable.
+ * Historical projection columns are preserved but empty until a validated transformation
+ * and independent control checks exist. Operator CRS settings cannot authorize output.
  * WGS84-to-NAD83 transformation and NAVD88 conversion are NOT implemented.
  */
 object RtkCoordinateExport {
@@ -12,20 +12,18 @@ object RtkCoordinateExport {
         require(fix.size == 10)
         val latitude = fix[1].toDoubleOrNull()
         val longitude = fix[2].toDoubleOrNull()
-        val projected = if (config.horizontal == "EPSG:6539" &&
-            config.source == "EPSG:6318" && fix[3] == "4" &&
-            latitude != null && longitude != null)
-            StatePlane6539.projectNad83_2011(latitude, longitude)
-        else null
-        val east = projected?.first?.toString() ?: ""
-        val north = projected?.second?.toString() ?: ""
+        // An operator datum setting is not evidence of a validated transformation/control.
+        // Preserve the historical schema, but fail closed until an independently validated
+        // transformation pipeline is installed. NAVD88 bottom elevations remain absent.
+        val east = ""
+        val north = ""
         val status = when {
             config.horizontal != "EPSG:6539" -> "NOT_APPLICABLE_CRS"
             config.source != "EPSG:6318" -> "SOURCE_DATUM_UNVERIFIED"
             fix[3] != "4" -> "RTK_NOT_FIXED"
-            projected == null -> "OUTSIDE_AREA_OR_INVALID"
-            else -> "PROVISIONAL_CONTROL_CHECK_REQUIRED"
+            latitude == null || longitude == null -> "INVALID_POSITION"
+            else -> "TRANSFORMATION_AND_CONTROL_UNVERIFIED"
         }
-        return "$received,${fix.joinToString(",")},$east,$north,$status\n"
+        return Csv.row(listOf(received.toString()) + fix + listOf(east, north, status))
     }
 }

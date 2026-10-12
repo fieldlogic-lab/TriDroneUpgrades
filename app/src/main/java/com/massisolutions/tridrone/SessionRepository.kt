@@ -14,11 +14,39 @@ class SessionRepository(private val root: File) {
 
     fun list(kind: Kind): List<Session> =
         File(root, kind.directory).listFiles { f -> f.isFile && f.extension.equals("csv", true) &&
-                (kind != Kind.LIVE || f.name.startsWith("gps_")) }
+                (kind != Kind.LIVE || f.name.startsWith("gps_") ||
+                    ((f.name.startsWith("wifi_fixes_") || f.name.startsWith("rtk_fixes_")) && validGnssHeader(f))) }
             ?.sortedWith(compareByDescending<File> { it.lastModified() }.thenByDescending { it.name })
             ?.map { Session(it, kind, countRows(it)) } ?: emptyList()
 
     fun latest(kind: Kind): File? = list(kind).firstOrNull()?.file
+
+    /** Frozen human label, never inferred from today's project preferences. */
+    fun displayName(session: Session): String {
+        val directory = File(root, session.kind.directory).canonicalFile
+        if (session.file.parentFile?.canonicalFile != directory) return session.file.name
+        val stem = session.file.nameWithoutExtension
+        val prefix = when {
+            stem.startsWith("wifi_fixes_") -> "wifi_" + stem.removePrefix("wifi_fixes_")
+            stem.startsWith("rtk_fixes_") -> "rtk_" + stem.removePrefix("rtk_fixes_")
+            else -> return session.file.name
+        }
+        return try {
+            val metadata = File(directory, "$prefix.metadata.csv")
+            if (!metadata.isFile || metadata.length() > 65536) return session.file.name
+            val rows = metadata.readLines()
+            val values = Csv.parse(rows.getOrNull(0) ?: "")?.zip(Csv.parse(rows.getOrNull(1) ?: "") ?: emptyList())?.toMap()
+            val label = SessionIdentity.safeLabel(values?.get("session_name").orEmpty())
+            label.ifBlank { session.file.name }
+        } catch (_: Exception) { session.file.name }
+    }
+
+    /** App-private diagnostics only; no arbitrary caller-supplied export directory. */
+    fun artifacts(): List<File> = listOf("surveys", "sounder_diagnostics").flatMap { name ->
+        val directory = File(root, name).canonicalFile
+        directory.listFiles()?.filter { file -> file.isFile && file.canonicalFile.parentFile == directory &&
+            file.extension.lowercase() in setOf("csv", "bin", "json") } ?: emptyList()
+    }.sortedByDescending { it.lastModified() }
 
     fun read(session: Session): List<Sample> {
         require(session.file.parentFile?.canonicalFile == File(root, session.kind.directory).canonicalFile) {
@@ -32,18 +60,19 @@ class SessionRepository(private val root: File) {
                 Kind.DEMO -> "event_utc_ms,latitude_deg,longitude_deg,simulated_depth_m,source,usage"
                 Kind.LIVE -> "utc_epoch_ms,elapsed_realtime_ns,latitude_deg,longitude_deg,horizontal_accuracy_m,altitude_m,vertical_accuracy_m,speed_mps,bearing_deg,provider"
             }
-            require(header == expected) { "Unexpected session CSV schema" }
+            val gnss = session.kind == Kind.LIVE && header == RtkCoordinateExport.header.trim()
+            require(header == expected || gnss) { "Unexpected session CSV schema" }
             val output = mutableListOf<Sample>()
             while (rows.hasNext()) {
                 val row = rows.next()
                 if (row.isBlank()) continue
-                val c = row.split(',')
+                val c = Csv.parse(row) ?: continue
                 val lat = c.getOrNull(if (session.kind == Kind.DEMO) 1 else 2)?.toDoubleOrNull()
                 val lon = c.getOrNull(if (session.kind == Kind.DEMO) 2 else 3)?.toDoubleOrNull()
                 val depth = if (session.kind == Kind.DEMO) c.getOrNull(3)?.toDoubleOrNull() else null
-                if (lat == null || lon == null || lat !in -90.0..90.0 || lon !in -180.0..180.0) continue
+                if (lat == null || lon == null || !lat.isFinite() || !lon.isFinite() || lat !in -90.0..90.0 || lon !in -180.0..180.0) continue
                 if (session.kind == Kind.DEMO &&
-                    (depth == null || c.getOrNull(4) != "DEMO_SYNTHETIC" || c.getOrNull(5) != "NOT_FOR_SURVEY")) continue
+                    (depth == null || !depth.isFinite() || depth < 0 || c.getOrNull(4) != "DEMO_SYNTHETIC" || c.getOrNull(5) != "NOT_FOR_SURVEY")) continue
                 output.add(Sample(lat, lon, depth))
             }
             output
@@ -53,4 +82,8 @@ class SessionRepository(private val root: File) {
     private fun countRows(file: File): Int = try {
         file.useLines { it.drop(1).count { row -> row.isNotBlank() } }
     } catch (_: Exception) { 0 }
+
+    private fun validGnssHeader(file: File): Boolean = try {
+        file.bufferedReader().use { it.readLine() == RtkCoordinateExport.header.trim() }
+    } catch (_: Exception) { false }
 }
