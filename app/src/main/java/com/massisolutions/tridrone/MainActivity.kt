@@ -548,6 +548,7 @@ class MainActivity : Activity(), LocationListener {
             val labels = devices.map { (it.name ?: "Unknown") + " (" + it.address + ")" }.toTypedArray()
             android.app.AlertDialog.Builder(this).setTitle("Select paired RTK receiver")
                 .setItems(labels) { _, i ->
+                    stopService(Intent(this, WifiRtkService::class.java))
                     val intent = Intent(this, RtkService::class.java).putExtra("address", devices[i].address)
                     try { startForegroundService(intent) }
                     catch (e: Exception) { Toast.makeText(this, "RTK start failed: " + e.message, Toast.LENGTH_LONG).show() }
@@ -574,11 +575,18 @@ class MainActivity : Activity(), LocationListener {
         if (::surveySummary.isInitialized) {
             val diagnostic = getSharedPreferences("sounder_diagnostics", MODE_PRIVATE)
             val depthState = diagnostic.getString("state", "disconnected")
-            surveySummary.text = "1  GNSS  •  " + (if (live) fixType else "Connect RS2+ and await a live fix") +
-                "\\n2  SOUNDER  •  " + (if (depthState == "connected") "Diagnostic link only — depth unverified" else "Inspect HydroLite connection") +
-                "\\n3  RECORDING  •  Locked pending live depth validation"
+            val operator = OperatorReadiness.evaluate(OperatorReadiness.State(
+                receiverState = gnss.getString("state", "disconnected").orEmpty(),
+                fixQuality = gnss.getString("quality", null),
+                fixAgeMs = if (gnss.getLong("last_fix_ms", 0L) > 0) fixAge else null,
+                sounderState = depthState.orEmpty()
+            ))
+            surveySummary.text = "1  GNSS  •  " + operator.gnss +
+                "\\n2  SOUNDER  •  " + operator.sounder +
+                "\\n3  RECORDING  •  " + operator.recording
+            setupNext.isEnabled = operator.canRecord
         }
-        setupSounder.alpha = if (live) 1f else 0.65f
+        setupSounder.alpha = 1f
         val rt = getSharedPreferences("rtk_status", MODE_PRIVATE)
         val rtAge = System.currentTimeMillis() - rt.getLong("last_fix_ms", 0L)
         val fixed = rt.getString("state", "") == "connected" && rt.getString("quality", "") == "4" && rtAge in 0..5000
