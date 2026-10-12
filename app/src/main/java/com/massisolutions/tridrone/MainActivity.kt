@@ -17,6 +17,10 @@ import android.location.LocationListener
 import android.location.LocationManager
 
 class MainActivity : Activity(), LocationListener {
+    private lateinit var liveCards: LinearLayout
+    private lateinit var liveGnssActions: LinearLayout
+    private lateinit var liveSounderActions: LinearLayout
+    private val sessionsRepository by lazy { SessionRepository(filesDir) }
     private lateinit var surveySummary: TextView
     private lateinit var setupStatus: TextView
     private lateinit var setupNext: Button
