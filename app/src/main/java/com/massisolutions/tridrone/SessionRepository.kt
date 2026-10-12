@@ -21,6 +21,26 @@ class SessionRepository(private val root: File) {
 
     fun latest(kind: Kind): File? = list(kind).firstOrNull()?.file
 
+    /** Frozen human label, never inferred from today's project preferences. */
+    fun displayName(session: Session): String {
+        val directory = File(root, session.kind.directory).canonicalFile
+        if (session.file.parentFile?.canonicalFile != directory) return session.file.name
+        val stem = session.file.nameWithoutExtension
+        val prefix = when {
+            stem.startsWith("wifi_fixes_") -> "wifi_" + stem.removePrefix("wifi_fixes_")
+            stem.startsWith("rtk_fixes_") -> "rtk_" + stem.removePrefix("rtk_fixes_")
+            else -> return session.file.name
+        }
+        return try {
+            val metadata = File(directory, "$prefix.metadata.csv")
+            if (!metadata.isFile || metadata.length() > 65536) return session.file.name
+            val rows = metadata.readLines()
+            val values = Csv.parse(rows.getOrNull(0) ?: "")?.zip(Csv.parse(rows.getOrNull(1) ?: "") ?: emptyList())?.toMap()
+            val label = SessionIdentity.safeLabel(values?.get("session_name").orEmpty())
+            label.ifBlank { session.file.name }
+        } catch (_: Exception) { session.file.name }
+    }
+
     /** App-private diagnostics only; no arbitrary caller-supplied export directory. */
     fun artifacts(): List<File> = listOf("surveys", "sounder_diagnostics").flatMap { name ->
         val directory = File(root, name).canonicalFile

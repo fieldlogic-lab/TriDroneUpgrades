@@ -4,11 +4,11 @@ import android.content.Context
 import android.os.SystemClock
 import java.io.Closeable
 import java.io.File
-import java.util.UUID
 
 /** One immutable configuration per acquisition session; append and flush through interruption. */
 class GnssSessionLog(context: Context, prefix: String) : Closeable {
-    val id = "${System.currentTimeMillis()}_${UUID.randomUUID()}"
+    private val capturedUtc = System.currentTimeMillis()
+    val id = SessionIdentity.newId(capturedUtc)
     private val settings = SurveyConfig.load(context)
     private val directory = File(context.filesDir, "surveys").apply { mkdirs() }
     private val opened = mutableListOf<Closeable>()
@@ -23,7 +23,7 @@ class GnssSessionLog(context: Context, prefix: String) : Closeable {
     private var offset = 0L
     init {
         try {
-        SurveyConfig.writeSnapshot(context, "${prefix}_$id", settings)
+        SurveyConfig.writeSessionMetadata(directory, "${prefix}_$id", settings, id, capturedUtc, "GNSS_RAW_DIAGNOSTIC_$prefix")
         raw.write("received_utc_ms,received_elapsed_ms,nmea_sentence\n")
         fixes.write(RtkCoordinateExport.header)
         chunks.write("received_utc_ms,received_elapsed_ms,byte_offset,byte_count\n")

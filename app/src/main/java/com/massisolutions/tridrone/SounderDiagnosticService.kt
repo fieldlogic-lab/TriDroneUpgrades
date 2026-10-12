@@ -61,6 +61,9 @@ class SounderDiagnosticService : Service() {
         running.set(true)
         ownership.claim(generation)
         val address = intent?.getStringExtra("address").orEmpty()
+        val settings = SurveyConfig.load(this)
+        val capturedUtc = System.currentTimeMillis()
+        val sessionId = SessionIdentity.newId(capturedUtc)
         Thread {
             var logFile: File? = null
             try {
@@ -82,7 +85,9 @@ class SounderDiagnosticService : Service() {
                 connection.connect()
                 connectTimeout.cancel(false)
                 val directory = File(filesDir, "sounder_diagnostics").apply { mkdirs() }
-                logFile = File(directory, "sounder_raw_${System.currentTimeMillis()}_${UUID.randomUUID()}.bin")
+                SurveyConfig.writeSessionMetadata(directory, "sounder_$sessionId", settings, sessionId,
+                    capturedUtc, "SOUNDER_UNVERIFIED_RAW_DIAGNOSTIC")
+                logFile = File(directory, "sounder_raw_$sessionId.bin")
                 ownership.withCurrent(generation) { prefs.edit().putString("file", logFile.absolutePath)
                     .putLong("bytes", 0L).putInt("frames", 0).remove("preview").apply()
                 }
