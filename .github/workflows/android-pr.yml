@@ -20,6 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Install JDK
         uses: actions/setup-java@v4
@@ -46,3 +47,25 @@ jobs:
             app/build/test-results/testDebugUnitTest/
             app/build/reports/lint-results-debug.*
           if-no-files-found: warn
+      - name: Record QA APK provenance
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          mkdir -p qa-apk
+          cp app/build/outputs/apk/debug/app-debug.apk qa-apk/TriDrone-qa-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging qa-apk/TriDrone-qa-debug.apk > qa-apk/apk-badging.txt
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs qa-apk/TriDrone-qa-debug.apk > qa-apk/signing-certificate.txt
+          sha256sum qa-apk/TriDrone-qa-debug.apk > qa-apk/SHA256SUMS.txt
+          printf 'commit_sha=%s\nrun_id=%s\nrun_attempt=%s\nsigning=ephemeral Android debug key; not a production release\n' "$EXPECTED_HEAD_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > qa-apk/build-info.txt
+          cat qa-apk/build-info.txt qa-apk/SHA256SUMS.txt
+          head -n 1 qa-apk/apk-badging.txt
+      - name: Upload installable QA debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TriDrone-pr-${{ github.event.pull_request.number }}-qa-apk
+          path: qa-apk/
+          if-no-files-found: error
+          retention-days: 14
