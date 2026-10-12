@@ -22,6 +22,10 @@ class MainActivity : Activity(), LocationListener {
     private lateinit var liveSounderActions: LinearLayout
     private val sessionsRepository by lazy { SessionRepository(filesDir) }
     private lateinit var surveySummary: TextView
+    private lateinit var surveyGnssLamp: Button
+    private lateinit var surveyDepthLamp: Button
+    private lateinit var surveyCollectionLamp: Button
+    private lateinit var surveyPrecision: TextView
     private lateinit var setupStatus: TextView
     private lateinit var setupNext: Button
     private lateinit var setupSounder: LinearLayout
@@ -268,17 +272,28 @@ class MainActivity : Activity(), LocationListener {
             tabButtons.add(tab)
             tabBar.addView(tab, LinearLayout.LayoutParams(0, -2, 1f))
         }
-        surveyPage.addView(heading("FIELD OPERATIONS", 12f, cyan))
-        surveyPage.addView(heading("Ready to collect?", 22f).apply { setTypeface(null, Typeface.BOLD) })
-        surveySummary = heading("GNSS  •  Awaiting receiver\nSOUNDER  •  Not verified", 15f, Color.WHITE)
-        surveySummary.setPadding(18, 18, 18, 18)
-        surveySummary.setBackgroundColor(panel)
-        surveyPage.addView(surveySummary)
-        surveyPage.addView(action("Set up GNSS and sounder  →") { selectPage(2) })
-        surveyPage.addView(action("Review previous sessions  →") { selectPage(1) })
-        surveyPage.addView(heading("Connect both sensors before recording. Live survey collection remains locked until hardware validation.", 14f, muted))
-        (captureCard.parent as? android.view.ViewGroup)?.removeView(captureCard)
-        surveyPage.addView(captureCard)
+        surveyPage.addView(heading("SURVEY STATUS", 12f, cyan))
+        surveyPage.addView(heading("Equipment readiness", 21f).apply { setTypeface(null, Typeface.BOLD) })
+        fun signal(title: String, onTap: () -> Unit): Button = action(title, onTap).apply {
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            minHeight = (90 * resources.displayMetrics.density).toInt()
+            minimumHeight = minHeight
+            setBackgroundColor(Color.rgb(143, 43, 43))
+            val params = LinearLayout.LayoutParams(-1, -2)
+            params.bottomMargin = (12 * resources.displayMetrics.density).toInt()
+            surveyPage.addView(this, params)
+        }
+        surveyGnssLamp = signal("GNSS  •  CONNECT") { selectPage(2) }
+        surveyDepthLamp = signal("DEPTH  •  CONNECT") { selectPage(2) }
+        surveyCollectionLamp = signal("COLLECTION  •  NOT READY") { selectPage(2) }
+        surveyPrecision = heading("H precision   Unavailable\nV precision   Unavailable", 19f, Color.WHITE).apply {
+            setTypeface(null, Typeface.BOLD)
+            setBackgroundColor(panel)
+            setPadding(18, 22, 18, 22)
+        }
+        surveyPage.addView(surveyPrecision)
+        surveyPage.addView(heading("Receiver-reported GST precision (1σ), not independently verified accuracy.", 12f, muted))
         sessionsPage.addView(heading("SESSIONS", 12f, cyan))
         sessionsPage.addView(heading("Review & export", 22f))
         (reviewCard.parent as? android.view.ViewGroup)?.removeView(reviewCard)
@@ -586,6 +601,41 @@ class MainActivity : Activity(), LocationListener {
                 "\\n3  RECORDING  •  " + operator.recording
             setupNext.isEnabled = operator.canRecord
         }
+        // Clear large-field indicators: red = absent/fault, amber = partial or unverified,
+        // green = verified acquisition status only. No simulated data can turn an indicator green.
+        val receiverState = gnss.getString("state", "disconnected").orEmpty()
+        val qualityCode = gnss.getString("quality", null)
+        val gnssGood = live && qualityCode == "4"
+        val gnssColor = when {
+            gnssGood -> Color.rgb(24, 130, 75)
+            receiverState == "connecting" || receiverState == "reconnecting" || live -> Color.rgb(177, 111, 24)
+            else -> Color.rgb(154, 45, 45)
+        }
+        fun styleLamp(button: Button, title: String, color: Int) {
+            button.text = title
+            button.setBackgroundColor(color)
+            button.elevation = if (color == Color.rgb(24, 130, 75)) 14f else 8f
+        }
+        styleLamp(surveyGnssLamp, "GNSS  •  " +
+            when {
+                gnssGood -> "RTK FIX"
+                live && qualityCode == "5" -> "FLOAT — WAIT"
+                live -> "CHECK FIX"
+                receiverState == "connecting" || receiverState == "reconnecting" -> "CONNECTING"
+                else -> "CONNECT"
+            }, gnssColor)
+        val sounderLink = getSharedPreferences("sounder_diagnostics", MODE_PRIVATE).getString("state", "")
+        styleLamp(surveyDepthLamp,
+            if (sounderLink == "connected") "DEPTH  •  UNVERIFIED" else "DEPTH  •  CONNECT",
+            if (sounderLink == "connected" || sounderLink == "connecting") Color.rgb(177, 111, 24)
+            else Color.rgb(154, 45, 45))
+        styleLamp(surveyCollectionLamp, "COLLECTION  •  NOT READY", Color.rgb(154, 45, 45))
+        val gstFresh = live && (System.currentTimeMillis() - gnss.getLong("gst_received_ms", 0L)) in 0..5000
+        val horizontal = if (gstFresh) gnss.getString("h_sigma_m", null)?.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } else null
+        val vertical = if (gstFresh) gnss.getString("v_sigma_m", null)?.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } else null
+        fun precision(v: Double?) = if (v == null) "Unavailable" else String.format(Locale.US, "%.3f m", v)
+        surveyPrecision.text = "H PRECISION    " + precision(horizontal) +
+            "\\nV PRECISION    " + precision(vertical)
         setupSounder.alpha = 1f
         val rt = getSharedPreferences("rtk_status", MODE_PRIVATE)
         val rtAge = System.currentTimeMillis() - rt.getLong("last_fix_ms", 0L)
