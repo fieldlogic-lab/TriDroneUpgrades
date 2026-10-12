@@ -300,7 +300,9 @@ class MainActivity : Activity() {
         val tick = object : Runnable {
             override fun run() {
                 if (!dialog.isShowing) return
-                info.text = "State: ${prefs.getString("state", "disconnected")}\n" +
+                val stored = prefs.getString("state", "disconnected").orEmpty()
+                val state = if (SounderDiagnosticService.active()) stored else if (stored == "error") "error" else "disconnected"
+                info.text = "State: $state\n" +
                     "Detail: ${prefs.getString("detail", "")}\n" +
                     "Bytes: ${prefs.getLong("bytes", 0L)}\n" +
                     "ASCII frames: ${prefs.getInt("frames", 0)}\n" +
