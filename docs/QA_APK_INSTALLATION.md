@@ -2,7 +2,9 @@
 
 The PR validation workflow runs JVM tests, Android lint, and `assembleDebug` on
 the exact PR head commit. Only a successful run uploads
-`TriDrone-pr-6-qa-apk` (the PR number varies). This is a downloadable GitHub
+`TriDrone-pr-6-qa-apk-attempt-1` (the PR and attempt numbers vary). Reruns retain
+separate artifacts for each attempt so independent QA evidence is preserved.
+This is a downloadable GitHub
 Actions artifact, not a GitHub release or an update-feed publication. Download
 it while signed into GitHub with access to this repository; artifacts expire
 after 14 days.

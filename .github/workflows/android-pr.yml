@@ -41,7 +41,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: TriDrone-pr-${{ github.event.pull_request.number }}-reports
+          name: TriDrone-pr-${{ github.event.pull_request.number }}-reports-attempt-${{ github.run_attempt }}
           path: |
             app/build/reports/tests/testDebugUnitTest/
             app/build/test-results/testDebugUnitTest/
@@ -65,7 +65,7 @@ jobs:
       - name: Upload installable QA debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: TriDrone-pr-${{ github.event.pull_request.number }}-qa-apk
+          name: TriDrone-pr-${{ github.event.pull_request.number }}-qa-apk-attempt-${{ github.run_attempt }}
           path: qa-apk/
           if-no-files-found: error
           retention-days: 14
