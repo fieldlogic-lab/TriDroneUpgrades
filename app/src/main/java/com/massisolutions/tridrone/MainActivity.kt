@@ -483,7 +483,7 @@ class MainActivity : Activity() {
             Toast.makeText(this, "No saved observation records", Toast.LENGTH_LONG).show()
             return
         }
-        val labels = sessions.map { "${it.file.name}  |  ${it.observations} points" }.toTypedArray()
+        val labels = sessions.map { "${sessionsRepository.displayName(it)}  |  ${it.observations} points\n${it.file.name}" }.toTypedArray()
         android.app.AlertDialog.Builder(this).setTitle(if (kind == SessionRepository.Kind.DEMO) "Historical synthetic test records" else "Saved observations")
             .setItems(labels) { _, index -> showSavedPoints(sessions[index]) }
             .setNegativeButton("Close", null).show()
@@ -503,7 +503,7 @@ class MainActivity : Activity() {
                     session.file.name.startsWith("gps_") -> "HISTORICAL PHONE GPS — NOT RTK OR BATHYMETRY"
                     else -> "RECEIVER GNSS OBSERVATIONS — NOT SYNCHRONIZED BATHYMETRY"
                 }
-                text = session.file.name + "\nRecorded positions: ${points.size}\n$source\n\n" +
+                text = sessionsRepository.displayName(session) + "\n" + session.file.name + "\nRecorded positions: ${points.size}\n$source\n\n" +
                     body + if (points.size > 200) "\n…first 200 displayed" else ""
                 setTextIsSelectable(true)
             })
