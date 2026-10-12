@@ -305,12 +305,6 @@ class MainActivity : Activity(), LocationListener {
         wizard.addView(heading("Survey workspace", 21f).apply { setTypeface(null, Typeface.BOLD) })
         modeLabel = heading("LIVE SURVEY  •  REAL HARDWARE", 15f, cyan)
         wizard.addView(modeLabel)
-        val modeSwitch = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val liveButton = action("LIVE") { setDemoMode(false) }
-        val demoButton = action("DEMO") { setDemoMode(true) }
-        modeSwitch.addView(liveButton, LinearLayout.LayoutParams(0, -2, 1f))
-        modeSwitch.addView(demoButton, LinearLayout.LayoutParams(0, -2, 1f))
-        wizard.addView(modeSwitch)
         liveCards = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         demoCards = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
         // Destination sections are mounted into the tab host below.
@@ -318,38 +312,33 @@ class MainActivity : Activity(), LocationListener {
         setupStatus = heading("Waiting for receiver", 15f, muted)
         gnssCard.addView(setupStatus)
         liveGnssActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        liveGnssActions.addView(action("Connect Emlid via Wi-Fi") { showWifiRtkSetup() })
-        liveGnssActions.addView(action("Bluetooth backup") { connectRtk() })
+        liveGnssActions.addView(action("1  Connect Reach RS2+ via Wi-Fi") { showWifiRtkSetup() })
+        liveGnssActions.addView(action("Use Bluetooth instead") { connectRtk() })
+        liveGnssActions.addView(heading("Connect to the receiver network first, then configure its NMEA IP and port. The app verifies incoming fixes; a network connection alone is not an RTK fix.", 13f, muted))
         gnssCard.addView(liveGnssActions)
         demoGnssActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
         demoGnssButton = action("Connect demo GNSS") { modeController.connectDemoGnss(); updateDemoUi() }
         demoGnssActions.addView(demoGnssButton)
-        gnssCard.addView(demoGnssActions)
         val sounderCard = section("02   DEPTH SOUNDER", "HydroLite Plus  /  hardware verification pending")
         setupSounder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         setupSounder.addView(heading("No verified depth stream", 14f, muted))
-        setupSounder.addView(action("Sounder diagnostics • connect / inspect") { showSounderDiagnostics() })
+        setupSounder.addView(action("2  Inspect HydroLite connection") { showSounderDiagnostics() })
+        setupSounder.addView(heading("Actual Bluetooth transport and depth messages must be confirmed on hardware. No verified live depth recording yet.", 13f, muted))
         liveSounderActions = setupSounder
         sounderCard.addView(liveSounderActions)
         demoSounderActions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
         demoSounderButton = action("Connect demo sounder") { modeController.connectDemoSounder(); updateDemoUi() }
         demoSounderActions.addView(demoSounderButton)
-        sounderCard.addView(demoSounderActions)
         val captureCard = section("03   SURVEY COLLECTION", "Continuous GNSS + depth logging")
-        setupNext = action("Recording unavailable — setup incomplete") {
-            if (demoMode) { if (demoRecording) stopDemoRecording() else startDemoRecording(); updateDemoUi() }
+        setupNext = action("3  Recording locked — depth not verified") {
+            Toast.makeText(this@MainActivity, "Connect and validate real GNSS and depth before recording", Toast.LENGTH_LONG).show()
         }
         setupNext.isEnabled = false
         captureCard.addView(setupNext)
-        captureCard.addView(heading("LIVE: Recording requires verified depth, offsets and synchronization. DEMO: Synthetic observations only.", 13f, muted))
+        captureCard.addView(heading("Live GNSS and verified sounder data are required. Recording remains disabled until real hardware synchronization is validated.", 13f, muted))
         val reviewCard = section("SESSIONS & REVIEW", "Inspect observations after recovery")
-        reviewCard.addView(action("Saved surveys and points") { if (demoMode) showDemoReview() else showSavedSurveys() })
-        reviewCard.addView(action("Export latest CSV") {
-            if (demoMode) {
-                val file = sessionsRepository.latest(SessionRepository.Kind.DEMO)
-                if (file != null) exportFile(file) else Toast.makeText(this@MainActivity, "No demo sessions yet", Toast.LENGTH_SHORT).show()
-            } else exportLatest()
-        })
+        reviewCard.addView(action("Saved surveys and points") { showSavedSurveys() })
+        reviewCard.addView(action("Export latest CSV") { exportLatest() })
         val toolsCard = section("SETTINGS & DIAGNOSTICS", "Advanced tools, configuration and tests")
         toolsCard.addView(action("Survey settings / coordinate systems") { showSurveySettings() })
         toolsCard.addView(action("Check for app updates") { AppUpdater.open(this@MainActivity) })
@@ -360,26 +349,7 @@ class MainActivity : Activity(), LocationListener {
                 .setMessage("Phone-only position logging is a diagnostic and cannot substitute for RTK plus synchronized depth. This feature is excluded from the main survey workflow.")
                 .setPositiveButton("OK", null).show()
         })
-        val testCard = section("DEVELOPMENT ONLY", "Synthetic soundings are never survey observations")
-        testCard.visibility = android.view.View.GONE
-        simulationStatus = heading("Simulation stopped", 14f, muted)
-        testCard.addView(simulationStatus)
-        testCard.addView(action("Start simulated depth test") { startSimulation() })
-        testCard.addView(action("Stop simulation") { stopSimulation() })
-        testCard.addView(action("Export simulation CSV") {
-            val file = simulationFile
-            if (file == null || !file.exists())
-                Toast.makeText(this@MainActivity, "No simulation file yet", Toast.LENGTH_SHORT).show()
-            else exportFile(file)
-        })
-        demoRecordButton = setupNext
-        demoStatus = heading("DEMO ONLY  •  Synthetic observations never enter live surveys", 14f, muted)
-        wizard.addView(demoStatus)
-        demoStatus.visibility = android.view.View.GONE
-        toolsCard.addView(action("Developer diagnostics") {
-            testCard.visibility = if (testCard.visibility == android.view.View.VISIBLE) android.view.View.GONE else android.view.View.VISIBLE
-        })
-        updateDemoUi()
+        // Synthetic testing controls deliberately excluded from the field-facing app.
         legacyPanel = layout
         // Keep the original diagnostic widgets initialized but off-screen.
         // A single navigation host owns all visible destinations.
@@ -435,23 +405,20 @@ class MainActivity : Activity(), LocationListener {
         surveySummary.setPadding(18, 18, 18, 18)
         surveySummary.setBackgroundColor(panel)
         surveyPage.addView(surveySummary)
-        surveyPage.addView(action("Connect & check equipment  →") { selectPage(2) })
+        surveyPage.addView(action("Set up GNSS and sounder  →") { selectPage(2) })
         surveyPage.addView(action("Review previous sessions  →") { selectPage(1) })
         surveyPage.addView(heading("Connect both sensors before recording. Live survey collection remains locked until hardware validation.", 14f, muted))
         (modeLabel.parent as? android.view.ViewGroup)?.removeView(modeLabel)
         surveyPage.addView(modeLabel)
-        (modeSwitch.parent as? android.view.ViewGroup)?.removeView(modeSwitch)
-        surveyPage.addView(modeSwitch)
         (captureCard.parent as? android.view.ViewGroup)?.removeView(captureCard)
         surveyPage.addView(captureCard)
-        (demoStatus.parent as? android.view.ViewGroup)?.removeView(demoStatus)
-        surveyPage.addView(demoStatus)
         sessionsPage.addView(heading("SESSIONS", 12f, cyan))
         sessionsPage.addView(heading("Review & export", 22f))
         (reviewCard.parent as? android.view.ViewGroup)?.removeView(reviewCard)
         sessionsPage.addView(reviewCard)
         equipmentPage.addView(heading("EQUIPMENT", 12f, cyan))
-        equipmentPage.addView(heading("Connections & diagnostics", 22f))
+        equipmentPage.addView(heading("Connect devices in order", 22f))
+        equipmentPage.addView(heading("First connect the RS2+; check live fix quality. Next inspect the HydroLite stream. Return to Survey when both are verified.", 14f, muted))
         (gnssCard.parent as? android.view.ViewGroup)?.removeView(gnssCard)
         equipmentPage.addView(gnssCard)
         (sounderCard.parent as? android.view.ViewGroup)?.removeView(sounderCard)
@@ -460,8 +427,6 @@ class MainActivity : Activity(), LocationListener {
         settingsPage.addView(heading("Preferences & tools", 22f))
         (toolsCard.parent as? android.view.ViewGroup)?.removeView(toolsCard)
         settingsPage.addView(toolsCard)
-        (testCard.parent as? android.view.ViewGroup)?.removeView(testCard)
-        settingsPage.addView(testCard)
         navHost.addView(top)
         navHost.addView(tabBar)
         navHost.addView(pageScroll, LinearLayout.LayoutParams(-1, 0, 1f))
