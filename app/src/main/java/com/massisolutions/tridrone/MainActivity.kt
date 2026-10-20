@@ -507,22 +507,15 @@ class MainActivity : Activity(), LocationListener {
         navHost.addView(top)
         navHost.addView(tabBar)
         navHost.addView(pageScroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        navHost.setOnApplyWindowInsetsListener { view, insets ->
-            if (Build.VERSION.SDK_INT >= 30) {
-                val safe = insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
-                view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
-            } else {
-                val cutout = if (Build.VERSION.SDK_INT >= 28) insets.displayCutout else null
-                view.setPadding(maxOf(insets.systemWindowInsetLeft, cutout?.safeInsetLeft ?: 0),
-                    maxOf(insets.systemWindowInsetTop, cutout?.safeInsetTop ?: 0),
-                    maxOf(insets.systemWindowInsetRight, cutout?.safeInsetRight ?: 0),
-                    maxOf(insets.systemWindowInsetBottom, cutout?.safeInsetBottom ?: 0))
-            }
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(navHost) { view, insets ->
+            val safe = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() or
+                androidx.core.view.WindowInsetsCompat.Type.displayCutout())
+            view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
             insets
         }
         selectPage(0)
         setContentView(navHost)
-        navHost.requestApplyInsets()
+        androidx.core.view.ViewCompat.requestApplyInsets(navHost)
     }
     override fun onResume() {
         super.onResume()

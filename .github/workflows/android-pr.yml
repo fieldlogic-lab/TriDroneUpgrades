@@ -81,12 +81,7 @@ jobs:
           profile: pixel_2
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: |
-            set +e
-            gradle --no-daemon :app:connectedDebugAndroidTest
-            test_result=$?
-            adb pull /sdcard/Android/data/com.massisolutions.tridrone/files/smoke-screenshots app/build/emulator-screenshots || true
-            exit "$test_result"
+          script: bash .github/scripts/android-smoke.sh
       - name: Upload emulator evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -96,5 +91,6 @@ jobs:
             app/build/reports/androidTests/connected/
             app/build/outputs/androidTest-results/connected/
             app/build/emulator-screenshots/
+            app/build/emulator-diagnostics/
           if-no-files-found: warn
 

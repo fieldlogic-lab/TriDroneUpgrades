@@ -12,6 +12,8 @@ import androidx.test.espresso.action.ViewActions.replaceText
 import androidx.test.espresso.action.ViewActions.scrollTo
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.*
+import androidx.test.espresso.matcher.RootMatchers.isDialog
+import androidx.test.espresso.matcher.RootMatchers.isPlatformPopup
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
@@ -76,23 +78,41 @@ class FieldUiSmokeTest {
         try {
             EquipmentSettings().save(file)
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-                openEquipmentSettings()
-                onView(withHint("Vertical offset in US survey feet (unset by default)"))
-                    .perform(scrollTo(), replaceText("3.25"), closeSoftKeyboard())
-                onView(isAssignableFrom(Spinner::class.java)).perform(scrollTo(), click())
-                onData(equalTo("Physical antenna reference point (ARP)")).perform(click())
-                onView(withText("I verified offset and receiver height reference; no duplicate antenna correction")).perform(scrollTo(), click())
-                onView(withText("Save")).perform(click())
-                assertEquals(3.25, EquipmentSettings.load(file).offsetUsft!!, 0.0)
-                assertTrue(EquipmentSettings.load(file).confirmed)
-                scenario.recreate()
-                openEquipmentSettings()
-                onView(withHint("Vertical offset in US survey feet (unset by default)"))
-                    .perform(scrollTo()).check(matches(withText("3.25")))
-                onView(withText("I verified offset and receiver height reference; no duplicate antenna correction"))
-                    .perform(scrollTo()).check(matches(isChecked()))
-                screenshot("equipment-settings-restored")
-                onView(withText("Cancel")).perform(click())
+                try {
+                    step("open equipment") { openEquipmentSettings() }
+                    step("enter offset") {
+                        onView(withHint("Vertical offset in US survey feet (unset by default)"))
+                            .inRoot(isDialog()).perform(scrollTo(), replaceText("3.25"), closeSoftKeyboard())
+                    }
+                    step("open reference dropdown") {
+                        onView(isAssignableFrom(Spinner::class.java)).inRoot(isDialog()).perform(scrollTo(), click())
+                    }
+                    step("select antenna reference") {
+                        onData(equalTo("Physical antenna reference point (ARP)"))
+                            .inRoot(isPlatformPopup()).perform(click())
+                    }
+                    step("confirm and save") {
+                        onView(withText("I verified offset and receiver height reference; no duplicate antenna correction"))
+                            .inRoot(isDialog()).perform(scrollTo(), click())
+                        onView(withText("Save")).inRoot(isDialog()).perform(click())
+                    }
+                    assertEquals(3.25, EquipmentSettings.load(file).offsetUsft!!, 0.0)
+                    assertTrue(EquipmentSettings.load(file).confirmed)
+                    step("recreate activity") { scenario.recreate() }
+                    step("reopen equipment") { openEquipmentSettings() }
+                    step("verify restored configuration") {
+                        onView(withHint("Vertical offset in US survey feet (unset by default)"))
+                            .inRoot(isDialog()).perform(scrollTo()).check(matches(withText("3.25")))
+                        onView(withText("I verified offset and receiver height reference; no duplicate antenna correction"))
+                            .inRoot(isDialog()).perform(scrollTo()).check(matches(isChecked()))
+                    }
+                    screenshot("equipment-settings-restored")
+                    onView(withText("Cancel")).inRoot(isDialog()).perform(click())
+                } catch (failure: Throwable) {
+                    // Capture while the failing dialog is still present, before ActivityScenario closes.
+                    runCatching { screenshot("equipment-failure") }
+                    throw failure
+                }
             }
         } finally {
             if (original == null) file.delete() else file.writeBytes(original)
@@ -102,6 +122,11 @@ class FieldUiSmokeTest {
     private fun openEquipmentSettings() {
         onView(withId(R.id.tab_settings)).perform(click())
         onView(withText("Antenna / transducer vertical offset")).perform(scrollTo(), click())
+    }
+
+    private fun step(name: String, action: () -> Unit) {
+        android.util.Log.i("SMOKE_STEP", name)
+        action()
     }
 
     private fun screenshot(name: String) {
