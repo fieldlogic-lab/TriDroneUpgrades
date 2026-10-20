@@ -35,7 +35,7 @@ jobs:
         with:
           gradle-version: "8.10.2"
       - name: Test, lint, and compile debug APK
-        run: gradle --no-daemon --continue :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+        run: gradle --no-daemon --continue :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
       - name: Upload validation reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -46,3 +46,51 @@ jobs:
             app/build/test-results/testDebugUnitTest/
             app/build/reports/lint-results-debug.*
           if-no-files-found: warn
+
+  emulator-smoke:
+    name: Android emulator smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install Android build tools
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"'
+      - name: Run real Android UI smoke tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash .github/scripts/android-smoke.sh
+      - name: Upload emulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TriDrone-pr-${{ github.event.pull_request.number }}-emulator-evidence
+          path: |
+            app/build/reports/androidTests/connected/
+            app/build/outputs/androidTest-results/connected/
+            app/build/emulator-screenshots/
+            app/build/emulator-diagnostics/
+          if-no-files-found: warn
+
