@@ -105,6 +105,41 @@ class HydrographyTest {
         assertEquals("MISSING_OR_STALE_GNSS", missing["pairing_status"])
     }
 
+    @Test fun previousTransportCannotDisconnectOrInjectIntoNewOwner() {
+        val state = HydroGnssState()
+        state.claim("bluetooth-old")
+        state.connection("bluetooth-old", true)
+        state.accept("bluetooth-old", gnss())
+        state.claim("wifi-new")
+        state.connection("wifi-new", true)
+        state.accept("wifi-new", gnss().copy(raw = "new owner"))
+        state.connection("bluetooth-old", false)
+        state.accept("bluetooth-old", gnss().copy(raw = "obsolete epoch"))
+        assertTrue(state.connected)
+        assertEquals("new owner", state.paired(depth(), 1000)!!.raw)
+        assertFalse(state.owns("bluetooth-old"))
+        state.connection("wifi-new", false)
+        assertNull(state.paired(depth(), 1000))
+    }
+
+    @Test fun confirmedNad83ProjectsProvisionallyWithIndependentProjReference() {
+        // Independent libproj.so.25, EPSG database: normalized EPSG:6318 -> EPSG:6539.
+        // This checks projection arithmetic, not receiver source datum or field control.
+        val g = gnss().copy(latitude = 40.8, longitude = -73.05)
+        fun cells(source: String, fix: HydroGnss? = g) = HydroCsv.columns.zip(
+            parseCsv(HydroCsv.row(depth(), fix, EquipmentSettings(), source))).toMap()
+        val projected = cells("EPSG:6318")
+        assertEquals(1247266.508899992, projected["easting_usft"]!!.toDouble(), 0.001)
+        assertEquals(232164.79807935783, projected["northing_usft"]!!.toDouble(), 0.001)
+        assertEquals("PROVISIONAL_CONTROL_CHECK_REQUIRED", projected["horizontal_status"])
+        assertEquals("", cells("UNKNOWN")["easting_usft"])
+        assertEquals("SOURCE_DATUM_UNVERIFIED", cells("UNKNOWN")["horizontal_status"])
+        assertEquals("", cells("EPSG:6318", g.copy(quality = 5))["easting_usft"])
+        assertEquals("RTK_NOT_FIXED", cells("EPSG:6318", g.copy(quality = 5))["horizontal_status"])
+        assertEquals("", cells("EPSG:6318", g.copy(latitude = 0.0))["northing_usft"])
+        assertEquals("OUTSIDE_AREA_OR_INVALID", cells("EPSG:6318", g.copy(latitude = 0.0))["horizontal_status"])
+    }
+
     private fun parseCsv(row: String): List<String> {
         val output = mutableListOf<String>(); val cell = StringBuilder(); var quoted = false; var i = 0
         while (i < row.trimEnd('\n').length) {

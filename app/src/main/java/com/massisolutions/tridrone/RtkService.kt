@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Bluetooth Classic RFCOMM NMEA receiver; does not inject mock Android locations. */
 class RtkService : Service() {
     private val channel = "tridrone_rtk"
+    private val hydroSource = UUID.randomUUID().toString()
     private val running = AtomicBoolean(false)
     private var socket: BluetoothSocket? = null
     private var worker: Thread? = null
@@ -25,8 +26,8 @@ class RtkService : Service() {
     private val prefs by lazy { getSharedPreferences("rtk_status", MODE_PRIVATE) }
     private val spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
     private fun report(state: String, detail: String = "") {
-        HydroLive.gnssConnection(state == "connected")
-        prefs.edit().putString("state", state).putString("detail", detail).apply()
+        HydroLive.gnssConnection(hydroSource, state == "connected")
+        synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("state", state).putString("detail", detail).apply() }
     }
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onCreate() {
@@ -43,6 +44,7 @@ class RtkService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") { stopSelf(); return START_NOT_STICKY }
         if (running.getAndSet(true)) return START_NOT_STICKY
+        HydroLive.claimGnss(hydroSource)
         val address = intent?.getStringExtra("address") ?: ""
         worker = Thread {
             try {
@@ -70,7 +72,7 @@ class RtkService : Service() {
                 rawWriter?.write("received_utc_ms,nmea_sentence\n")
                 fixWriter?.write(RtkCoordinateExport.header)
                 rawWriter?.flush(); fixWriter?.flush()
-                prefs.edit().putString("session", session).putInt("sentences", 0).putInt("fixes", 0).remove("last_fix_ms").remove("h_sigma_m").remove("v_sigma_m").apply()
+                synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("session", session).putInt("sentences", 0).putInt("fixes", 0).remove("last_fix_ms").remove("h_sigma_m").remove("v_sigma_m").apply() }
                 report("connected", address)
                 val input = connection.inputStream
                 val line = StringBuilder()
@@ -87,22 +89,22 @@ class RtkService : Service() {
                             line.setLength(0)
                             if (!sentence.startsWith("$") || sentence.length > 256 || !NmeaGga.valid(sentence)) continue
                             val received = System.currentTimeMillis()
-                            HydroLive.gnssSentence(this, sentence, received, SystemClock.elapsedRealtimeNanos())
+                            HydroLive.gnssSentence(hydroSource, sentence, received, SystemClock.elapsedRealtimeNanos())
                             rawWriter?.write("$received,${sentence.replace(",", "\\,")}\n")
                             rawWriter?.flush()
                             count++
                             val gst = NmeaGst.parse(sentence)
-                            if (gst != null) prefs.edit().putString("h_sigma_m", gst.first.toString()).putString("v_sigma_m", gst.second.toString()).putLong("gst_received_ms", received).apply()
+                            if (gst != null) synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("h_sigma_m", gst.first.toString()).putString("v_sigma_m", gst.second.toString()).putLong("gst_received_ms", received).apply() }
                             val fix = NmeaGnssAdapter.parseGga(sentence, received)?.let { NmeaGga.parse(sentence) }
                             if (fix != null) {
                                 fixes++
                                 fixWriter?.write(RtkCoordinateExport.row(received, fix, SurveyConfig.load(this)))
                                 fixWriter?.flush()
-                                prefs.edit().putString("quality", fix[3]).putString("satellites", fix[4])
+                                synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("quality", fix[3]).putString("satellites", fix[4])
                                     .putString("lat", fix[1]).putString("lon", fix[2]).putString("hdop", fix[5])
-                                    .putLong("last_fix_ms", received).apply()
+                                    .putLong("last_fix_ms", received).apply() }
                             }
-                            prefs.edit().putInt("sentences", count).putInt("fixes", fixes).apply()
+                            synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putInt("sentences", count).putInt("fixes", fixes).apply() }
                         } else if (c.code in 32..126 && line.length < 256) line.append(c)
                         else if (line.length >= 256) line.setLength(0)
                     }
@@ -121,7 +123,7 @@ class RtkService : Service() {
         return START_NOT_STICKY
     }
     override fun onDestroy() {
-        HydroLive.gnssConnection(false)
+        HydroLive.gnssConnection(hydroSource, false)
         running.set(false)
         try { socket?.close() } catch (_: Exception) {}
         if (prefs.getString("state", "") != "error") report("disconnected", "Stopped")
@@ -171,6 +173,7 @@ object NmeaGst {
  * Never marks an RTK fix until a fresh, valid GGA sentence arrives.
  */
 class WifiRtkService : Service() {
+    private val hydroSource = UUID.randomUUID().toString()
     private val running = AtomicBoolean(false)
     private var worker: Thread? = null
     @Volatile private var tcp: java.net.Socket? = null
@@ -189,10 +192,11 @@ class WifiRtkService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") { stopSelf(); return START_NOT_STICKY }
         if (running.getAndSet(true)) return START_NOT_STICKY
+        HydroLive.claimGnss(hydroSource)
         val host = intent?.getStringExtra("host").orEmpty()
         val port = intent?.getIntExtra("port", 0) ?: 0
         if (host.isBlank() || port !in 1..65535) {
-            prefs.edit().putString("state", "error").putString("detail", "Configure receiver IP and TCP port").apply()
+            synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("state", "error").putString("detail", "Configure receiver IP and TCP port").apply() }
             running.set(false); stopSelf(); return START_NOT_STICKY
         }
         worker = Thread {
@@ -208,48 +212,48 @@ class WifiRtkService : Service() {
                         output.write(RtkCoordinateExport.header)
                         while (running.get()) {
                             try {
-                                HydroLive.gnssConnection(false)
-                                prefs.edit().putString("state", "connecting")
+                                HydroLive.gnssConnection(hydroSource, false)
+                                synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("state", "connecting")
                                     .putString("detail", "$host:$port")
-                                    .remove("last_fix_ms").remove("gst_received_ms").remove("h_sigma_m").remove("v_sigma_m").apply()
+                                    .remove("last_fix_ms").remove("gst_received_ms").remove("h_sigma_m").remove("v_sigma_m").apply() }
                                 val socket = java.net.Socket()
                                 tcp = socket
                                 socket.connect(java.net.InetSocketAddress(host, port), 7000)
                                 socket.soTimeout = 12000
-                                HydroLive.gnssConnection(true)
-                                prefs.edit().putString("state", "connected").putString("detail", "Wi-Fi TCP $host:$port")
+                                HydroLive.gnssConnection(hydroSource, true)
+                                synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("state", "connected").putString("detail", "Wi-Fi TCP $host:$port")
                                     .putString("transport", "wifi").putString("session", session)
-                                    .remove("last_fix_ms").remove("gst_received_ms").remove("h_sigma_m").remove("v_sigma_m").apply()
+                                    .remove("last_fix_ms").remove("gst_received_ms").remove("h_sigma_m").remove("v_sigma_m").apply() }
                                 socket.getInputStream().bufferedReader().use { reader ->
                                     while (running.get()) {
                                         val sentence = reader.readLine() ?: throw java.io.EOFException("NMEA stream closed")
                                         if (sentence.length > 256 || !sentence.startsWith("$") || !NmeaGga.valid(sentence)) continue
                                         val received = System.currentTimeMillis()
-                                        HydroLive.gnssSentence(this, sentence, received, SystemClock.elapsedRealtimeNanos())
+                                        HydroLive.gnssSentence(hydroSource, sentence, received, SystemClock.elapsedRealtimeNanos())
                                         raw.write("$received,${sentence.replace(",", "\\,")}\n")
                                         raw.flush()
                                         count++
                                         NmeaGst.parse(sentence)?.let { gst ->
-                                            prefs.edit().putString("h_sigma_m", gst.first.toString())
+                                            synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("h_sigma_m", gst.first.toString())
                                                 .putString("v_sigma_m", gst.second.toString())
-                                                .putLong("gst_received_ms", received).apply()
+                                                .putLong("gst_received_ms", received).apply() }
                                         }
                                         NmeaGnssAdapter.parseGga(sentence, received)?.let { _ ->
                                             val fix = NmeaGga.parse(sentence) ?: return@let
                                             fixes++
                                             output.write(RtkCoordinateExport.row(received, fix, SurveyConfig.load(this)))
                                             output.flush()
-                                            prefs.edit().putString("quality", fix[3]).putString("satellites", fix[4])
+                                            synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("quality", fix[3]).putString("satellites", fix[4])
                                                 .putString("lat", fix[1]).putString("lon", fix[2])
-                                                .putString("hdop", fix[5]).putLong("last_fix_ms", received).apply()
+                                                .putString("hdop", fix[5]).putLong("last_fix_ms", received).apply() }
                                         }
-                                        prefs.edit().putInt("sentences", count).putInt("fixes", fixes).apply()
+                                        synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putInt("sentences", count).putInt("fixes", fixes).apply() }
                                     }
                                 }
                             } catch (e: Exception) {
-                                HydroLive.gnssConnection(false)
-                                if (running.get()) prefs.edit().putString("state", "reconnecting")
-                                    .putString("detail", e.message ?: "Connection lost").remove("last_fix_ms").remove("gst_received_ms").remove("h_sigma_m").remove("v_sigma_m").apply()
+                                HydroLive.gnssConnection(hydroSource, false)
+                                if (running.get()) synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("state", "reconnecting")
+                                    .putString("detail", e.message ?: "Connection lost").remove("last_fix_ms").remove("gst_received_ms").remove("h_sigma_m").remove("v_sigma_m").apply() }
                             } finally {
                                 try { tcp?.close() } catch (_: Exception) {}
                                 tcp = null
@@ -259,8 +263,8 @@ class WifiRtkService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                if (running.get()) prefs.edit().putString("state", "error")
-                    .putString("detail", e.message ?: "Wi-Fi RTK error").apply()
+                if (running.get()) synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("state", "error")
+                    .putString("detail", e.message ?: "Wi-Fi RTK error").apply() }
             } finally {
                 running.set(false)
                 stopSelf()
@@ -269,10 +273,10 @@ class WifiRtkService : Service() {
         return START_NOT_STICKY
     }
     override fun onDestroy() {
-        HydroLive.gnssConnection(false)
+        HydroLive.gnssConnection(hydroSource, false)
         running.set(false)
         try { tcp?.close() } catch (_: Exception) {}
-        prefs.edit().putString("state", "disconnected").remove("last_fix_ms").remove("gst_received_ms").remove("h_sigma_m").remove("v_sigma_m").apply()
+        synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("state", "disconnected").remove("last_fix_ms").remove("gst_received_ms").remove("h_sigma_m").remove("v_sigma_m").apply() }
         super.onDestroy()
     }
 }

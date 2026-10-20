@@ -16,14 +16,15 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Numeric validity does not establish manufacturer protocol or hardware accuracy.
  */
 class SounderDiagnosticService : Service() {
+    private val hydroSource = UUID.randomUUID().toString()
     private val running = AtomicBoolean(false)
     private var socket: BluetoothSocket? = null
     private val prefs by lazy { getSharedPreferences("sounder_diagnostics", MODE_PRIVATE) }
     private val spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
     private fun status(state: String, detail: String = "") {
-        HydroLive.sounderConnection(state == "connected")
-        prefs.edit().putString("state", state).putString("detail", detail).apply()
+        HydroLive.sounderConnection(hydroSource, state == "connected")
+        synchronized(HydroLive) { if (HydroLive.ownsSounder(hydroSource)) prefs.edit().putString("state", state).putString("detail", detail).apply() }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -47,6 +48,7 @@ class SounderDiagnosticService : Service() {
             return START_NOT_STICKY
         }
         if (!running.compareAndSet(false, true)) return START_NOT_STICKY
+        HydroLive.claimSounder(hydroSource)
         val address = intent?.getStringExtra("address").orEmpty()
         Thread {
             var logFile: File? = null
@@ -64,8 +66,8 @@ class SounderDiagnosticService : Service() {
                 connection.connect()
                 val directory = File(filesDir, "sounder_diagnostics").apply { mkdirs() }
                 logFile = File(directory, "sounder_raw_${System.currentTimeMillis()}.bin")
-                prefs.edit().putString("file", logFile.absolutePath)
-                    .putLong("bytes", 0L).putInt("frames", 0).remove("preview").apply()
+                synchronized(HydroLive) { if (HydroLive.ownsSounder(hydroSource)) prefs.edit().putString("file", logFile.absolutePath)
+                    .putLong("bytes", 0L).putInt("frames", 0).remove("preview").apply() }
                 status("connected", "Provisional field-2 meters decoder; hardware verification required")
                 val framer = DepthStreamDecoder()
                 var bytesTotal = 0L
@@ -80,14 +82,14 @@ class SounderDiagnosticService : Service() {
                             output.write(buffer, 0, count)
                             output.flush()
                             bytesTotal += count
-                            HydroLive.rawDepth(buffer, count)
+                            HydroLive.rawDepth(hydroSource, buffer, count)
                             val frames = framer.accept(buffer, count)
                             framesTotal += frames.size
-                            frames.forEach { frame -> HydroLive.frame(this, frame, System.currentTimeMillis(), SystemClock.elapsedRealtimeNanos()) }
-                            prefs.edit().putLong("bytes", bytesTotal)
+                            frames.forEach { frame -> HydroLive.frame(hydroSource, frame, System.currentTimeMillis(), SystemClock.elapsedRealtimeNanos()) }
+                            synchronized(HydroLive) { if (HydroLive.ownsSounder(hydroSource)) prefs.edit().putLong("bytes", bytesTotal)
                                 .putInt("frames", framesTotal)
                                 .putString("preview", frames.lastOrNull()?.take(160) ?: "")
-                                .apply()
+                                .apply() }
                         }
                     }
                 }

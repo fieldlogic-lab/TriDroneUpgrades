@@ -31,10 +31,16 @@ object HydroLive {
     @Volatile var error = ""; private set
 
     fun equipmentFile(c: Context) = File(c.filesDir, "equipment.properties")
-    @Synchronized fun gnssConnection(connected: Boolean) {
-        gnss.connection(connected); precision = null; precisionRaw = ""; precisionUtc = null
+    @Synchronized fun ownsGnss(source: String) = gnss.owns(source)
+    @Synchronized fun claimGnss(source: String) {
+        gnss.claim(source); precision = null; precisionRaw = ""; precisionUtc = null
     }
-    @Synchronized fun gnssSentence(c: Context, sentence: String, utc: Long, nanos: Long) {
+    @Synchronized fun gnssConnection(source: String, connected: Boolean) {
+        if (!gnss.owns(source)) return
+        gnss.connection(source, connected); precision = null; precisionRaw = ""; precisionUtc = null
+    }
+    @Synchronized fun gnssSentence(source: String, sentence: String, utc: Long, nanos: Long) {
+        if (!gnss.owns(source)) return
         try {
             rawGnssWriter?.apply { write("$utc,$nanos,${HydroCsv.cell(sentence)}\n"); flush() }
         } catch (e: Exception) { fail(e) }
@@ -48,15 +54,22 @@ object HydroLive {
             observation.fixQuality ?: 0, observation.altitudeMeters, sigma?.first, sigma?.second,
             fields[0], if (sigma != null) precisionRaw else "", if (sigma != null) precisionUtc else null))
     }
-    @Synchronized fun sounderConnection(connected: Boolean) {
+    private var sounderOwner = ""
+    @Synchronized fun ownsSounder(source: String) = source == sounderOwner
+    @Synchronized fun claimSounder(source: String) {
+        sounderOwner = source; sounderConnected = false; depth = null
+    }
+    @Synchronized fun sounderConnection(source: String, connected: Boolean) {
+        if (source != sounderOwner) return
         sounderConnected = connected
         depth = null
     }
-    @Synchronized fun rawDepth(bytes: ByteArray, count: Int) {
-        if (!recording) return
+    @Synchronized fun rawDepth(source: String, bytes: ByteArray, count: Int) {
+        if (source != sounderOwner || !recording) return
         try { rawDepthOutput?.apply { write(bytes, 0, count); flush() } } catch (e: Exception) { fail(e) }
     }
-    @Synchronized fun frame(c: Context, frame: String, utc: Long, nanos: Long) {
+    @Synchronized fun frame(source: String, frame: String, utc: Long, nanos: Long) {
+        if (source != sounderOwner) return
         val sample = HydroLiteDecoder.decode(frame, utc, nanos)
         depth = sample
         android.util.Log.d("HydroLite", "${sample.validity}: ${sample.diagnostic}")

@@ -87,6 +87,11 @@ data class HydroGnss(val raw: String, val receivedUtcMillis: Long, val elapsedNa
 
 /** Connection transitions invalidate the previous epoch, including on reconnect. */
 class HydroGnssState {
+    private var owner = ""
+    fun claim(source: String) { owner = source; connection(false) }
+    fun owns(source: String) = source == owner
+    fun connection(source: String, value: Boolean) { if (owns(source)) connection(value) }
+    fun accept(source: String, value: HydroGnss) { if (owns(source)) accept(value) }
     var connected = false; private set
     var latest: HydroGnss? = null; private set
     fun connection(value: Boolean) { connected = value; latest = null }
@@ -98,7 +103,7 @@ class HydroGnssState {
 
 object HydroCsv {
     val columns = listOf("utc_epoch_ms", "elapsed_realtime_ns", "gnss_received_utc_ms", "gnss_elapsed_realtime_ns",
-        "gnss_receiver_utc", "latitude_deg", "longitude_deg", "source_crs", "gnss_quality", "h_precision_m", "v_precision_m",
+        "gnss_receiver_utc", "latitude_deg", "longitude_deg", "easting_usft", "northing_usft", "source_crs", "gnss_quality", "h_precision_m", "v_precision_m",
         "h_precision_usft", "v_precision_usft", "raw_gga_altitude_m", "raw_gga_height_reference", "raw_depth_m", "depth_usft",
         "vertical_offset_usft", "antenna_reference", "offset_confirmed", "bottom_navd88_usft", "horizontal_crs", "vertical_target",
         "horizontal_status", "vertical_status", "depth_validity", "pairing_status", "pair_delta_ms", "protocol", "raw_depth",
@@ -109,13 +114,22 @@ object HydroCsv {
         return if (s.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) "\"" + s.replace("\"", "\"\"") + "\"" else s
     }
     fun row(depth: HydroDepth, gnss: HydroGnss?, equipment: EquipmentSettings, sourceCrs: String): String {
+        val projected = if (sourceCrs == "EPSG:6318" && gnss?.quality == 4)
+            StatePlane6539.projectNad83_2011(gnss.latitude, gnss.longitude) else null
+        val horizontalStatus = when {
+            gnss == null -> "MISSING_OR_STALE_GNSS"
+            sourceCrs != "EPSG:6318" -> "SOURCE_DATUM_UNVERIFIED"
+            gnss.quality != 4 -> "RTK_NOT_FIXED"
+            projected == null -> "OUTSIDE_AREA_OR_INVALID"
+            else -> "PROVISIONAL_CONTROL_CHECK_REQUIRED"
+        }
         val values = listOf(depth.utcMillis, depth.elapsedNanos, gnss?.receivedUtcMillis, gnss?.elapsedNanos,
-            gnss?.receiverUtc, gnss?.latitude, gnss?.longitude, sourceCrs, gnss?.quality,
+            gnss?.receiverUtc, gnss?.latitude, gnss?.longitude, projected?.first, projected?.second, sourceCrs, gnss?.quality,
             gnss?.horizontalSigmaMeters, gnss?.verticalSigmaMeters,
             gnss?.horizontalSigmaMeters?.let(SurveyUnits::feet), gnss?.verticalSigmaMeters?.let(SurveyUnits::feet),
             gnss?.altitudeMeters, "GGA_MSL_UNVERIFIED_NOT_NAVD88", depth.meters, depth.meters?.let(SurveyUnits::feet),
             equipment.offsetUsft, equipment.antennaReference, equipment.confirmed, null, "EPSG:6539", "EPSG:6360",
-            "UNVERIFIED_NO_PROJECTED_COORDINATES", "WITHHELD_NO_VERIFIED_VERTICAL_TRANSFORM", depth.validity,
+            horizontalStatus, "WITHHELD_NO_VERIFIED_VERTICAL_TRANSFORM", depth.validity,
             if (gnss != null) "PAIRED_RECEIPT_TIME" else "MISSING_OR_STALE_GNSS",
             gnss?.let { (depth.elapsedNanos - it.elapsedNanos) / 1_000_000.0 }, HydroLiteDecoder.PROTOCOL,
             depth.raw, gnss?.raw, gnss?.precisionRaw, gnss?.precisionReceivedUtcMillis, equipment.pairToleranceMillis,
