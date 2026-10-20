@@ -147,6 +147,8 @@ class MainActivity : Activity(), LocationListener {
             handler.postDelayed(this, 1000)
         }
     }
+    private lateinit var gnssStatusButton: Button
+    private lateinit var sounderStatusButton: Button
     private lateinit var liveDepth: TextView
     private lateinit var liveRecording: TextView
     private lateinit var surveySummary: TextView
@@ -445,32 +447,40 @@ class MainActivity : Activity(), LocationListener {
             tabButtons.add(tab)
             tabBar.addView(tab, LinearLayout.LayoutParams(0, -2, 1f))
         }
-        surveyPage.addView(heading("FIELD OPERATIONS", 12f, cyan))
-        surveyPage.addView(heading("Ready to collect?", 22f).apply { setTypeface(null, Typeface.BOLD) })
-        surveySummary = heading("GNSS  •  Awaiting receiver\nSOUNDER  •  Not verified", 15f, Color.WHITE)
-        surveySummary.setPadding(18, 18, 18, 18)
-        surveySummary.setBackgroundColor(panel)
-        surveyPage.addView(surveySummary)
-        for (view in listOf(gpsBar, gpsMetrics)) {
-            (view.parent as? android.view.ViewGroup)?.removeView(view)
-            surveyPage.addView(view)
+        surveyPage.addView(heading("Survey", 24f).apply { setTypeface(null, Typeface.BOLD) })
+        gnssStatusButton = action("GNSS • Disconnected") { selectPage(2) }.apply {
+            minHeight = 64; textSize = 18f; setTextColor(Color.WHITE)
         }
-        liveDepth = heading("SOUNDER • No Reading", 23f)
+        sounderStatusButton = action("Sounder • Disconnected") { selectPage(2) }.apply {
+            minHeight = 64; textSize = 18f; setTextColor(Color.WHITE)
+        }
+        surveyPage.addView(gnssStatusButton)
+        surveyPage.addView(sounderStatusButton)
+        (gpsMetrics.parent as? android.view.ViewGroup)?.removeView(gpsMetrics)
+        gpsMetrics.setTextColor(Color.WHITE)
+        surveyPage.addView(gpsMetrics)
+        liveDepth = heading("DEPTH  — US survey ft", 27f)
         surveyPage.addView(liveDepth)
-        liveRecording = heading("Not recording • 0 valid soundings", 17f)
+        liveRecording = heading("Stopped • 00:00:00\n0 valid soundings", 17f)
         surveyPage.addView(liveRecording)
-        surveyPage.addView(action("Equipment vertical offset") { showEquipmentSettings() })
-        surveyPage.addView(action("Connect & check equipment  →") { selectPage(2) })
-        surveyPage.addView(action("Review previous sessions  →") { selectPage(1) })
-        surveyPage.addView(heading("Connect GNSS and sounder before recording. Protocol, sensor latency and survey accuracy require field validation.", 14f, muted))
+        (setupNext.parent as? android.view.ViewGroup)?.removeView(setupNext)
+        surveyPage.addView(setupNext)
         (modeLabel.parent as? android.view.ViewGroup)?.removeView(modeLabel)
         surveyPage.addView(modeLabel)
-        (modeSwitch.parent as? android.view.ViewGroup)?.removeView(modeSwitch)
-        surveyPage.addView(modeSwitch)
-        (captureCard.parent as? android.view.ViewGroup)?.removeView(captureCard)
-        surveyPage.addView(captureCard)
+        surveyPage.addView(heading("Provisional depth • NAVD88 elevation withheld", 12f, muted))
         (demoStatus.parent as? android.view.ViewGroup)?.removeView(demoStatus)
         surveyPage.addView(demoStatus)
+        // Connection controls and verbose acquisition details stay in Equipment.
+        surveySummary = heading("Awaiting external sensors", 15f, Color.WHITE)
+        equipmentPage.addView(surveySummary)
+        (gpsBar.parent as? android.view.ViewGroup)?.removeView(gpsBar)
+        equipmentPage.addView(gpsBar)
+        (sounderStatus.parent as? android.view.ViewGroup)?.removeView(sounderStatus)
+        sounderCard.addView(sounderStatus.apply { setTextColor(muted) })
+        // Mode selection belongs with configuration; the active mode remains visible on Survey.
+        (modeSwitch.parent as? android.view.ViewGroup)?.removeView(modeSwitch)
+        settingsPage.addView(heading("Observation mode", 16f))
+        settingsPage.addView(modeSwitch)
         sessionsPage.addView(heading("SESSIONS", 12f, cyan))
         sessionsPage.addView(heading("Review & export", 22f))
         (reviewCard.parent as? android.view.ViewGroup)?.removeView(reviewCard)
@@ -536,14 +546,15 @@ class MainActivity : Activity(), LocationListener {
         val gstFresh = fresh && (System.currentTimeMillis() - r.getLong("gst_received_ms", 0L)) in 0..5000
         val hSigma = if (gstFresh) r.getString("h_sigma_m", null)?.toDoubleOrNull() else null
         val vSigma = if (gstFresh) r.getString("v_sigma_m", null)?.toDoubleOrNull() else null
-        val h = if (hSigma != null) String.format(Locale.US, "%.3f US survey ft • RS2+ GST 1σ", SurveyUnits.feet(hSigma))
-            else if (fresh) "Unavailable (enable GST output)"
+        val h = if (hSigma != null) String.format(Locale.US, "%.3f US survey ft", SurveyUnits.feet(hSigma))
+            else if (fresh) "Unavailable"
             else "Unavailable"
-        val v = if (vSigma != null) String.format(Locale.US, "%.3f US survey ft • RS2+ GST 1σ", SurveyUnits.feet(vSigma))
-            else if (fresh) "Unavailable (enable GST output)"
+        val v = if (vSigma != null) String.format(Locale.US, "%.3f US survey ft", SurveyUnits.feet(vSigma))
+            else if (fresh) "Unavailable"
             else "Unavailable"
-        gpsMetrics.text = "Receiver horizontal precision: $h\nReceiver vertical precision: $v\n" +
-            (if (fresh) "RS2+ satellites: " + r.getString("satellites", "—") + " • HDOP: " + r.getString("hdop", "—") else "Awaiting external RTK")
+        gpsMetrics.text = if (demoMode) "DEMO • No live precision displayed" else
+            "Horizontal: $h\nVertical: $v  •  receiver 1σ"
+
     }
     private fun startSimulation() {
         if (simulationActive) return
@@ -889,12 +900,30 @@ class MainActivity : Activity(), LocationListener {
             surveySummary.text = "GNSS • ${gnss.getString("state", "disconnected")} • ${if (live) fixType else "No fresh epoch"}\n" +
                 "SOUNDER • ${if (HydroLive.sounderConnected) "Connected" else "Disconnected"}\n" +
                 "NAVD88 bottom • withheld: no verified vertical transformation"
+            val red = Color.rgb(151, 49, 49)
+            val amber = Color.rgb(164, 107, 20)
+            val green = Color.rgb(21, 119, 78)
+            val gnssConnected = gnss.getString("state", "") == "connected"
+            gnssStatusButton.text = "GNSS • " + when {
+                live -> fixType
+                gnssConnected -> "No fresh fix"
+                else -> "Disconnected"
+            }
+            gnssStatusButton.setBackgroundColor(when {
+                !gnssConnected -> red
+                live && gnss.getString("quality", "") == "4" -> green
+                else -> amber
+            })
+            sounderStatusButton.text = "Sounder • " + when {
+                !HydroLive.sounderConnected -> "Disconnected"
+                depthValid -> "Valid • provisional"
+                depthState.startsWith("INVALID") -> "Invalid"
+                else -> "No Reading"
+            }
+            // The eight-field protocol remains unverified even with a fresh numeric depth.
+            sounderStatusButton.setBackgroundColor(if (HydroLive.sounderConnected) amber else red)
             val value = if (depthValid) String.format(Locale.US, "%.2f US survey ft", SurveyUnits.feet(reading!!.meters!!)) else "—"
-            liveDepth.text = "DEPTH  $value\n" + when {
-                depthValid -> "Valid (provisional field-2 decoder)"
-                depthState.startsWith("INVALID") -> "Invalid • $depthState"
-                else -> "No Reading • $depthState"
-            } + (reading?.let { "\nReceived UTC " + java.time.Instant.ofEpochMilli(it.utcMillis).toString() } ?: "")
+            liveDepth.text = "DEPTH  $value"
             liveDepth.setTextColor(when {
                 depthValid -> Color.rgb(89, 220, 145)
                 HydroLive.sounderConnected -> Color.rgb(255, 193, 72)
@@ -904,12 +933,15 @@ class MainActivity : Activity(), LocationListener {
             val seconds = if (HydroLive.startedNanos > 0) ((endNanos - HydroLive.startedNanos) / 1_000_000_000L).coerceAtLeast(0) else 0L
             liveRecording.text = "${if (HydroLive.recording) "RECORDING" else "Stopped"} • " +
                 String.format(Locale.US, "%02d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60) +
-                "\n${HydroLive.validCount} valid paired soundings • ${HydroLive.eventCount} raw depth events\n" +
-                "Provisional numeric validity; not survey-grade certification" +
+                "\n${HydroLive.validCount} valid paired soundings" +
                 (if (HydroLive.error.isNotBlank()) "\nWrite error: ${HydroLive.error}" else "")
             setupNext.text = if (HydroLive.recording) "STOP LIVE RECORDING" else "START LIVE RECORDING"
             setupNext.isEnabled = true
         } else {
+            gnssStatusButton.text = "DEMO GNSS • " + if (demoGnss) "Simulated connected" else "Disconnected"
+            sounderStatusButton.text = "DEMO sounder • " + if (demoSounder) "Simulated connected" else "Disconnected"
+            gnssStatusButton.setBackgroundColor(Color.rgb(164, 107, 20))
+            sounderStatusButton.setBackgroundColor(Color.rgb(164, 107, 20))
             surveySummary.text = "DEMO • Synthetic observations only"
             liveDepth.text = "DEMO • Live measurements hidden"
             liveRecording.text = "DEMO • Synthetic recording controls below"
@@ -917,7 +949,9 @@ class MainActivity : Activity(), LocationListener {
         }
         setupSounder.alpha = if (live) 1f else 0.65f
         readiness.text = "SURVEY READINESS • Provisional acquisition only\nNo verified vertical control"
-        sounderStatus.text = depthState
+        sounderStatus.text = "Decoder: $depthState" +
+            (reading?.let { "\nReceived UTC " + java.time.Instant.ofEpochMilli(it.utcMillis).toString() } ?: "") +
+            "\nProtocol and sensor latency require field verification"
         val rp = getSharedPreferences("rtk_status", MODE_PRIVATE)
         val rtkAge = (System.currentTimeMillis() - rp.getLong("last_fix_ms", 0L)) / 1000
         val quality = rp.getString("quality", "?") ?: "?"
