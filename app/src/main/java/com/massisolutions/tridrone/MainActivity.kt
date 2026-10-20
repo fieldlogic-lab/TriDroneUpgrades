@@ -181,6 +181,12 @@ class MainActivity : Activity(), LocationListener {
             handler.postDelayed(this, 1000)
         }
     }
+    private fun installedBuild(): Pair<String, Long> {
+        val info = packageManager.getPackageInfo(packageName, 0)
+        val code = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode
+            else @Suppress("DEPRECATION") info.versionCode.toLong()
+        return Pair(info.versionName ?: "Unknown version", code)
+    }
     private fun dp(value: Int) = (value * resources.displayMetrics.density + 0.5f).toInt()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -411,7 +417,7 @@ class MainActivity : Activity(), LocationListener {
             setBackgroundColor(navy)
         }
         top.addView(heading("TRIDRONE", 25f, Color.WHITE).apply { setTypeface(null, Typeface.BOLD) })
-        top.addView(heading("HYDROGRAPHIC FIELD SYSTEM", 12f, muted))
+        top.addView(heading("TEST BUILD ${installedBuild().second}", 12f, muted))
         val tabBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setBackgroundColor(panel) }
         val pages = listOf("Survey", "Sessions", "Equipment", "Settings")
         val tabButtons = mutableListOf<Button>()
@@ -452,7 +458,6 @@ class MainActivity : Activity(), LocationListener {
             tabButtons.add(tab)
             tabBar.addView(tab, LinearLayout.LayoutParams(0, -2, 1f))
         }
-        surveyPage.addView(heading("Survey", 24f).apply { setTypeface(null, Typeface.BOLD) })
         gnssStatusButton = action("GNSS • Disconnected") { selectPage(2) }.apply {
             id = R.id.survey_gnss_status
             minHeight = dp(64); textSize = 18f; setTextColor(Color.WHITE)
@@ -464,6 +469,7 @@ class MainActivity : Activity(), LocationListener {
         surveyPage.addView(gnssStatusButton)
         surveyPage.addView(sounderStatusButton)
         (gpsMetrics.parent as? android.view.ViewGroup)?.removeView(gpsMetrics)
+        gpsMetrics.id = R.id.survey_precision
         gpsMetrics.setTextColor(Color.WHITE)
         surveyPage.addView(gpsMetrics)
         liveDepth = heading("DEPTH  — US survey ft", 27f).apply { id = R.id.survey_depth }
@@ -474,7 +480,6 @@ class MainActivity : Activity(), LocationListener {
         surveyPage.addView(setupNext)
         (modeLabel.parent as? android.view.ViewGroup)?.removeView(modeLabel)
         surveyPage.addView(modeLabel)
-        surveyPage.addView(heading("Provisional depth • NAVD88 elevation withheld", 12f, muted))
         (demoStatus.parent as? android.view.ViewGroup)?.removeView(demoStatus)
         surveyPage.addView(demoStatus)
         // Connection controls and verbose acquisition details stay in Equipment.
@@ -500,6 +505,8 @@ class MainActivity : Activity(), LocationListener {
         equipmentPage.addView(sounderCard)
         settingsPage.addView(heading("SETTINGS", 12f, cyan))
         settingsPage.addView(heading("Preferences & tools", 22f))
+        val build = installedBuild()
+        settingsPage.addView(heading("Installed test build ${build.second}\n${build.first}", 14f, muted))
         (toolsCard.parent as? android.view.ViewGroup)?.removeView(toolsCard)
         settingsPage.addView(toolsCard)
         (testCard.parent as? android.view.ViewGroup)?.removeView(testCard)
@@ -961,6 +968,9 @@ class MainActivity : Activity(), LocationListener {
             liveRecording.text = "DEMO • Synthetic recording controls below"
             updateDemoUi()
         }
+        setupNext.setTextColor(Color.WHITE)
+        setupNext.setBackgroundColor(if (if (demoMode) demoRecording else HydroLive.recording)
+            Color.rgb(151, 49, 49) else Color.rgb(21, 119, 78))
         setupSounder.alpha = if (live) 1f else 0.65f
         readiness.text = "SURVEY READINESS • Provisional acquisition only\nNo verified vertical control"
         sounderStatus.text = "Decoder: $depthState" +

@@ -12,7 +12,9 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()?.plus(1000) ?: 3
-        versionName = "0.3.0"
+        val testRun = System.getenv("GITHUB_RUN_NUMBER") ?: "local"
+        val sourceCommit = System.getenv("GITHUB_SHA")?.take(7) ?: "uncommitted"
+        versionName = "0.3.0-test.$testRun.$sourceCommit"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
