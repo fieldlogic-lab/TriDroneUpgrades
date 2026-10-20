@@ -25,15 +25,22 @@ import androidx.test.espresso.matcher.RootMatchers.isPlatformPopup
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import org.hamcrest.Matchers.*
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.junit.FixMethodOrder
+import org.junit.runners.MethodSorters
 import org.junit.runner.RunWith
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /** Real Android UI exercise. No GNSS/depth fixtures or fake sensor observations are injected. */
 @RunWith(AndroidJUnit4::class)
+@FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class FieldUiSmokeTest {
     @get:Rule val locationPermission: GrantPermissionRule = GrantPermissionRule.grant(
         Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
@@ -151,8 +158,10 @@ class FieldUiSmokeTest {
 
     private fun screenshot(name: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        awaitCommittedActivityFrame()
         val bitmap = checkNotNull(instrumentation.uiAutomation.takeScreenshot()) { "Screenshot unavailable" }
         try {
+            if (name == "survey-disconnected") requireVisibleSurveyFrame(bitmap)
             saveScreenshot(name, bitmap)
             if (name == "survey-disconnected") {
                 val width = minOf(540, bitmap.width)
@@ -162,6 +171,40 @@ class FieldUiSmokeTest {
                 finally { if (preview !== bitmap) preview.recycle() }
             }
         } finally { bitmap.recycle() }
+    }
+
+    private fun requireVisibleSurveyFrame(bitmap: Bitmap) {
+        // Reject an OS starting-window screenshot; view-tree assertions alone cannot prove composition.
+        // Sample the central content, excluding status/navigation bars and transient bottom toasts.
+        var nearWhite = 0
+        var samples = 0
+        for (xStep in 1..9) for (yStep in 2..7) {
+            val pixel = bitmap.getPixel(bitmap.width * xStep / 10, bitmap.height * yStep / 10)
+            if (Color.red(pixel) > 235 && Color.green(pixel) > 235 && Color.blue(pixel) > 235) nearWhite++
+            samples++
+        }
+        check(nearWhite * 5 < samples * 4) { "Survey screenshot is a blank white starting-window frame" }
+    }
+
+    private fun awaitCommittedActivityFrame() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.waitForIdleSync()
+        val committed = CountDownLatch(1)
+        instrumentation.runOnMainSync {
+            val activity = ActivityLifecycleMonitorRegistry.getInstance()
+                .getActivitiesInStage(Stage.RESUMED).single()
+            val decor = activity.window.decorView
+            if (Build.VERSION.SDK_INT >= 29 && decor.isHardwareAccelerated) {
+                decor.viewTreeObserver.registerFrameCommitCallback { committed.countDown() }
+                decor.invalidate()
+            } else {
+                decor.postOnAnimation { committed.countDown() }
+                decor.invalidate()
+            }
+        }
+        check(committed.await(5, TimeUnit.SECONDS)) { "Activity did not commit a screenshot frame within 5 seconds" }
+        instrumentation.waitForIdleSync()
+        if (Build.VERSION.SDK_INT >= 29) instrumentation.uiAutomation.syncInputTransactions()
     }
 
     private fun saveScreenshot(name: String, bitmap: Bitmap) {
