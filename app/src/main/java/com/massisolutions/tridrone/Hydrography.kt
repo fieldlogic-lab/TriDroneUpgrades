@@ -96,6 +96,11 @@ class HydroGnssState {
     var latest: HydroGnss? = null; private set
     fun connection(value: Boolean) { connected = value; latest = null }
     fun accept(value: HydroGnss) { if (connected) latest = value }
+    fun invalidateForSentence(sentence: String): Boolean {
+        if (!NmeaGnssAdapter.invalidatesFix(sentence)) return false
+        latest = null
+        return true
+    }
     fun paired(depth: HydroDepth, toleranceMillis: Long): HydroGnss? = latest?.takeIf {
         connected && depth.elapsedNanos - it.elapsedNanos in 0..toleranceMillis * 1_000_000 && it.quality in 1..5
     }
@@ -136,5 +141,46 @@ object HydroCsv {
             "DEVICE_RECEIPT_UTC_AND_MONOTONIC;SENSOR_LATENCY_UNVERIFIED")
         check(values.size == columns.size)
         return values.joinToString(",") { cell(it) } + "\n"
+    }
+}
+
+/** UTC time-of-day equality plus receipt-age guard; never attach a neighboring epoch's GST. */
+object NmeaEpochTime {
+    fun key(raw: String): Double? {
+        if (!raw.matches(Regex("[0-9]{6}(\\.[0-9]+)?"))) return null
+        val value = raw.toDoubleOrNull() ?: return null
+        val hour = (value / 10000).toInt()
+        val minute = (value / 100).toInt() % 100
+        val second = value % 100
+        return value.takeIf { hour in 0..23 && minute in 0..59 && second >= 0 && second < 60 }
+    }
+}
+
+data class ReceiverPrecision(val horizontalMeters: Double, val verticalMeters: Double,
+    val raw: String, val receivedUtcMillis: Long, val elapsedNanos: Long, val epoch: Double)
+
+class NmeaPrecisionTracker {
+    private var latest: ReceiverPrecision? = null
+    private var gga: Pair<String, Long>? = null
+    fun reset() { latest = null; gga = null }
+    fun forLatest(nanos: Long): ReceiverPrecision? = gga?.takeIf { nanos - it.second in 0..3_000_000_000L }
+        ?.let { forGga(it.first, nanos) }
+    fun accept(sentence: String, utc: Long, nanos: Long) {
+        val fields = sentence.substringBefore('*').removePrefix("$").split(',')
+        if (NmeaGnssAdapter.isGga(sentence)) {
+            gga = if (!NmeaGnssAdapter.invalidatesFix(sentence)) Pair(sentence, nanos) else null
+            return
+        }
+        if (!fields.firstOrNull().orEmpty().endsWith("GST")) return
+        latest = null
+        if (!NmeaGga.valid(sentence)) return
+        val sigma = NmeaGst.parse(sentence) ?: return
+        val epoch = NmeaEpochTime.key(fields.getOrNull(1).orEmpty()) ?: return
+        latest = ReceiverPrecision(sigma.first, sigma.second, sentence, utc, nanos, epoch)
+    }
+    fun forGga(sentence: String, nanos: Long): ReceiverPrecision? {
+        if (!NmeaGnssAdapter.isGga(sentence)) return null
+        val epoch = NmeaEpochTime.key(sentence.substringBefore('*').split(',').getOrNull(1).orEmpty()) ?: return null
+        return latest?.takeIf { nanos - it.elapsedNanos in 0..3_000_000_000L && kotlin.math.abs(it.epoch - epoch) < 0.000001 }
     }
 }

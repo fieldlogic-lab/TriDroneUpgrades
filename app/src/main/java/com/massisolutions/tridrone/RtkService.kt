@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Bluetooth Classic RFCOMM NMEA receiver; does not inject mock Android locations. */
 class RtkService : Service() {
     private val channel = "tridrone_rtk"
+    private val precisionTracker = NmeaPrecisionTracker()
     private val hydroSource = UUID.randomUUID().toString()
     private val running = AtomicBoolean(false)
     private var socket: BluetoothSocket? = null
@@ -45,6 +46,7 @@ class RtkService : Service() {
         if (intent?.action == "STOP") { stopSelf(); return START_NOT_STICKY }
         if (running.getAndSet(true)) return START_NOT_STICKY
         HydroLive.claimGnss(hydroSource)
+        precisionTracker.reset()
         val address = intent?.getStringExtra("address") ?: ""
         worker = Thread {
             try {
@@ -93,9 +95,9 @@ class RtkService : Service() {
                             rawWriter?.write("$received,${sentence.replace(",", "\\,")}\n")
                             rawWriter?.flush()
                             count++
-                            val gst = NmeaGst.parse(sentence)
-                            if (gst != null) synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("h_sigma_m", gst.first.toString()).putString("v_sigma_m", gst.second.toString()).putLong("gst_received_ms", received).apply() }
-                            val fix = NmeaGnssAdapter.parseGga(sentence, received)?.let { NmeaGga.parse(sentence) }
+                            synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource))
+                                ReceiverStatusEpoch.update(prefs, precisionTracker, sentence, received, SystemClock.elapsedRealtimeNanos()) }
+                            val fix = NmeaGnssAdapter.parseGga(sentence, received)?.takeIf { it.fixQuality != 0 }?.let { NmeaGga.parse(sentence) }
                             if (fix != null) {
                                 fixes++
                                 fixWriter?.write(RtkCoordinateExport.row(received, fix, SurveyConfig.load(this)))
@@ -144,13 +146,22 @@ object NmeaGga {
     fun parse(sentence: String): List<String>? {
         val fields = sentence.substringBefore('*').removePrefix("$").split(',')
         if (!fields.firstOrNull().orEmpty().endsWith("GGA") || fields.size < 15) return null
-        fun degrees(raw: String, hemisphere: String): String {
-            val v = raw.toDoubleOrNull() ?: return ""
+        fun degrees(raw: String, hemisphere: String, latitude: Boolean): String? {
+            if (raw.isEmpty() && fields[6] == "0") return ""
+            val allowed = if (latitude) setOf("N", "S") else setOf("E", "W")
+            if (hemisphere !in allowed || !raw.matches(Regex(if (latitude) "[0-9]{4}(\\.[0-9]+)?" else "[0-9]{5}(\\.[0-9]+)?"))) return null
+            val v = raw.toDoubleOrNull() ?: return null
+            if (!v.isFinite() || v < 0) return null
             val d = kotlin.math.floor(v / 100)
-            val decimal = d + (v - d * 100) / 60.0
+            val minutes = v - d * 100
+            val maximum = if (latitude) 90 else 180
+            if ((minutes < 0.0 || minutes >= 60.0) || d > maximum || (d == maximum.toDouble() && minutes != 0.0)) return null
+            val decimal = d + minutes / 60.0
             return (if (hemisphere == "S" || hemisphere == "W") -decimal else decimal).toString()
         }
-        return listOf(fields[1], degrees(fields[2], fields[3]), degrees(fields[4], fields[5]),
+        val latitude = degrees(fields[2], fields[3], true) ?: return null
+        val longitude = degrees(fields[4], fields[5], false) ?: return null
+        return listOf(fields[1], latitude, longitude,
             fields[6], fields[7], fields[8], fields[9], fields[11], fields[13], fields[14])
     }
 }
@@ -173,6 +184,7 @@ object NmeaGst {
  * Never marks an RTK fix until a fresh, valid GGA sentence arrives.
  */
 class WifiRtkService : Service() {
+    private val precisionTracker = NmeaPrecisionTracker()
     private val hydroSource = UUID.randomUUID().toString()
     private val running = AtomicBoolean(false)
     private var worker: Thread? = null
@@ -193,6 +205,7 @@ class WifiRtkService : Service() {
         if (intent?.action == "STOP") { stopSelf(); return START_NOT_STICKY }
         if (running.getAndSet(true)) return START_NOT_STICKY
         HydroLive.claimGnss(hydroSource)
+        precisionTracker.reset()
         val host = intent?.getStringExtra("host").orEmpty()
         val port = intent?.getIntExtra("port", 0) ?: 0
         if (host.isBlank() || port !in 1..65535) {
@@ -213,6 +226,7 @@ class WifiRtkService : Service() {
                         while (running.get()) {
                             try {
                                 HydroLive.gnssConnection(hydroSource, false)
+                                precisionTracker.reset()
                                 synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("state", "connecting")
                                     .putString("detail", "$host:$port")
                                     .remove("last_fix_ms").remove("gst_received_ms").remove("h_sigma_m").remove("v_sigma_m").apply() }
@@ -233,12 +247,9 @@ class WifiRtkService : Service() {
                                         raw.write("$received,${sentence.replace(",", "\\,")}\n")
                                         raw.flush()
                                         count++
-                                        NmeaGst.parse(sentence)?.let { gst ->
-                                            synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("h_sigma_m", gst.first.toString())
-                                                .putString("v_sigma_m", gst.second.toString())
-                                                .putLong("gst_received_ms", received).apply() }
-                                        }
-                                        NmeaGnssAdapter.parseGga(sentence, received)?.let { _ ->
+                                        synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource))
+                                            ReceiverStatusEpoch.update(prefs, precisionTracker, sentence, received, SystemClock.elapsedRealtimeNanos()) }
+                                        NmeaGnssAdapter.parseGga(sentence, received)?.takeIf { it.fixQuality != 0 }?.let { _ ->
                                             val fix = NmeaGga.parse(sentence) ?: return@let
                                             fixes++
                                             output.write(RtkCoordinateExport.row(received, fix, SurveyConfig.load(this)))
@@ -281,3 +292,24 @@ class WifiRtkService : Service() {
     }
 }
 
+
+/** Called under the acquisition ownership lock. Invalid GGA clears the previous displayed fix immediately. */
+object ReceiverStatusEpoch {
+    fun update(prefs: android.content.SharedPreferences, tracker: NmeaPrecisionTracker,
+        sentence: String, utc: Long, nanos: Long) {
+        tracker.accept(sentence, utc, nanos)
+        val isGga = NmeaGnssAdapter.isGga(sentence)
+        if (!isGga && !sentence.substringBefore(',').endsWith("GST")) return
+        val edit = prefs.edit().remove("h_sigma_m").remove("v_sigma_m").remove("gst_received_ms")
+        if (NmeaGnssAdapter.invalidatesFix(sentence)) {
+            tracker.reset()
+            edit.putString("quality", "0").remove("last_fix_ms").remove("lat").remove("lon").apply()
+            return
+        }
+        tracker.forLatest(nanos)?.let {
+            edit.putString("h_sigma_m", it.horizontalMeters.toString()).putString("v_sigma_m", it.verticalMeters.toString())
+                .putLong("gst_received_ms", it.receivedUtcMillis)
+        }
+        edit.apply()
+    }
+}

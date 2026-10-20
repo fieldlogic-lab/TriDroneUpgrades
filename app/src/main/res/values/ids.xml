@@ -1,0 +1,11 @@
+<resources>
+    <item name="survey_gnss_status" type="id" />
+    <item name="survey_sounder_status" type="id" />
+    <item name="survey_start_stop" type="id" />
+    <item name="survey_depth" type="id" />
+    <item name="survey_mode" type="id" />
+    <item name="tab_survey" type="id" />
+    <item name="tab_sessions" type="id" />
+    <item name="tab_equipment" type="id" />
+    <item name="tab_settings" type="id" />
+</resources>

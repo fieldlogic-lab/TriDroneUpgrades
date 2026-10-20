@@ -9,9 +9,7 @@ import org.json.JSONObject
 /** Shared acquisition coordinator. All sources are external hardware; demo providers never enter here. */
 object HydroLive {
     private val gnss = HydroGnssState()
-    private var precision: Triple<Double, Double, Long>? = null
-    private var precisionRaw = ""
-    private var precisionUtc: Long? = null
+    private val precision = NmeaPrecisionTracker()
     private var writer: BufferedWriter? = null
     private var rawGnssWriter: BufferedWriter? = null
     private var rawDepthOutput: java.io.OutputStream? = null
@@ -33,26 +31,35 @@ object HydroLive {
     fun equipmentFile(c: Context) = File(c.filesDir, "equipment.properties")
     @Synchronized fun ownsGnss(source: String) = gnss.owns(source)
     @Synchronized fun claimGnss(source: String) {
-        gnss.claim(source); precision = null; precisionRaw = ""; precisionUtc = null
+        gnss.claim(source); precision.reset()
     }
     @Synchronized fun gnssConnection(source: String, connected: Boolean) {
         if (!gnss.owns(source)) return
-        gnss.connection(source, connected); precision = null; precisionRaw = ""; precisionUtc = null
+        gnss.connection(source, connected); precision.reset()
     }
     @Synchronized fun gnssSentence(source: String, sentence: String, utc: Long, nanos: Long) {
         if (!gnss.owns(source)) return
         try {
             rawGnssWriter?.apply { write("$utc,$nanos,${HydroCsv.cell(sentence)}\n"); flush() }
         } catch (e: Exception) { fail(e) }
-        NmeaGst.parse(sentence)?.let {
-            precision = Triple(it.first, it.second, nanos); precisionRaw = sentence; precisionUtc = utc
+        precision.accept(sentence, utc, nanos)
+        if (gnss.invalidateForSentence(sentence)) { precision.reset(); return }
+        if (sentence.substringBefore(',').endsWith("GST")) {
+            val previous = gnss.latest
+            if (previous != null && nanos - previous.elapsedNanos in 0..3_000_000_000L) {
+                val matched = precision.forLatest(nanos)
+                gnss.accept(previous.copy(horizontalSigmaMeters = matched?.horizontalMeters,
+                    verticalSigmaMeters = matched?.verticalMeters, precisionRaw = matched?.raw.orEmpty(),
+                    precisionReceivedUtcMillis = matched?.receivedUtcMillis))
+            }
+            return
         }
         val observation = NmeaGnssAdapter.parseGga(sentence, utc) ?: return
         val fields = NmeaGga.parse(sentence) ?: return
-        val sigma = precision?.takeIf { nanos - it.third in 0..3_000_000_000L }
+        val sigma = precision.forGga(sentence, nanos)
         gnss.accept(HydroGnss(sentence, utc, nanos, observation.latitude, observation.longitude,
-            observation.fixQuality ?: 0, observation.altitudeMeters, sigma?.first, sigma?.second,
-            fields[0], if (sigma != null) precisionRaw else "", if (sigma != null) precisionUtc else null))
+            observation.fixQuality ?: 0, observation.altitudeMeters, sigma?.horizontalMeters, sigma?.verticalMeters,
+            fields[0], sigma?.raw.orEmpty(), sigma?.receivedUtcMillis))
     }
     private var sounderOwner = ""
     @Synchronized fun ownsSounder(source: String) = source == sounderOwner

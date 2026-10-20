@@ -106,6 +106,7 @@ class MainActivity : Activity(), LocationListener {
         modeLabel.text = if (enabled) "DEMO MODE  •  SYNTHETIC DATA" else "LIVE SURVEY  •  REAL HARDWARE"
         demoStatus.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
         updateDemoUi()
+        updateDisplay()
     }
     private fun startDemoRecording() {
         if (!demoMode || !demoGnss || !demoSounder || demoRecording) return
@@ -180,6 +181,7 @@ class MainActivity : Activity(), LocationListener {
             handler.postDelayed(this, 1000)
         }
     }
+    private fun dp(value: Int) = (value * resources.displayMetrics.density + 0.5f).toInt()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val root = ScrollView(this)
@@ -311,7 +313,7 @@ class MainActivity : Activity(), LocationListener {
         wizard.addView(heading("TRIDRONE  /  HYDRO", 25f, cyan).apply { setTypeface(null, Typeface.BOLD) })
         wizard.addView(heading("FIELD CONSOLE   •   OFFLINE LOGGER", 12f, muted))
         wizard.addView(heading("Survey workspace", 21f).apply { setTypeface(null, Typeface.BOLD) })
-        modeLabel = heading("LIVE SURVEY  •  REAL HARDWARE", 15f, cyan)
+        modeLabel = heading("LIVE SURVEY  •  REAL HARDWARE", 15f, cyan).apply { id = R.id.survey_mode }
         wizard.addView(modeLabel)
         val modeSwitch = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val liveButton = action("LIVE") { setDemoMode(false) }
@@ -354,7 +356,8 @@ class MainActivity : Activity(), LocationListener {
             }
         }
         setupNext.isEnabled = true
-        setupNext.minHeight = 72
+        setupNext.id = R.id.survey_start_stop
+        setupNext.minHeight = dp(72)
         setupNext.textSize = 20f
         captureCard.addView(setupNext)
         captureCard.addView(heading("Live records provisional soundings and quality flags. NAVD88 elevations require verified vertical control. Demo observations remain separate.", 13f, muted))
@@ -437,6 +440,8 @@ class MainActivity : Activity(), LocationListener {
         pages.forEachIndexed { index, name ->
             val tab = Button(this).apply {
                 text = name
+                id = listOf(R.id.tab_survey, R.id.tab_sessions, R.id.tab_equipment, R.id.tab_settings)[index]
+                minHeight = dp(48)
                 isAllCaps = false
                 textSize = 12f
                 minWidth = 0
@@ -449,17 +454,19 @@ class MainActivity : Activity(), LocationListener {
         }
         surveyPage.addView(heading("Survey", 24f).apply { setTypeface(null, Typeface.BOLD) })
         gnssStatusButton = action("GNSS • Disconnected") { selectPage(2) }.apply {
-            minHeight = 64; textSize = 18f; setTextColor(Color.WHITE)
+            id = R.id.survey_gnss_status
+            minHeight = dp(64); textSize = 18f; setTextColor(Color.WHITE)
         }
         sounderStatusButton = action("Sounder • Disconnected") { selectPage(2) }.apply {
-            minHeight = 64; textSize = 18f; setTextColor(Color.WHITE)
+            id = R.id.survey_sounder_status
+            minHeight = dp(64); textSize = 18f; setTextColor(Color.WHITE)
         }
         surveyPage.addView(gnssStatusButton)
         surveyPage.addView(sounderStatusButton)
         (gpsMetrics.parent as? android.view.ViewGroup)?.removeView(gpsMetrics)
         gpsMetrics.setTextColor(Color.WHITE)
         surveyPage.addView(gpsMetrics)
-        liveDepth = heading("DEPTH  — US survey ft", 27f)
+        liveDepth = heading("DEPTH  — US survey ft", 27f).apply { id = R.id.survey_depth }
         surveyPage.addView(liveDepth)
         liveRecording = heading("Stopped • 00:00:00\n0 valid soundings", 17f)
         surveyPage.addView(liveRecording)
@@ -500,8 +507,22 @@ class MainActivity : Activity(), LocationListener {
         navHost.addView(top)
         navHost.addView(tabBar)
         navHost.addView(pageScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        navHost.setOnApplyWindowInsetsListener { view, insets ->
+            if (Build.VERSION.SDK_INT >= 30) {
+                val safe = insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+                view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
+            } else {
+                val cutout = if (Build.VERSION.SDK_INT >= 28) insets.displayCutout else null
+                view.setPadding(maxOf(insets.systemWindowInsetLeft, cutout?.safeInsetLeft ?: 0),
+                    maxOf(insets.systemWindowInsetTop, cutout?.safeInsetTop ?: 0),
+                    maxOf(insets.systemWindowInsetRight, cutout?.safeInsetRight ?: 0),
+                    maxOf(insets.systemWindowInsetBottom, cutout?.safeInsetBottom ?: 0))
+            }
+            insets
+        }
         selectPage(0)
         setContentView(navHost)
+        navHost.requestApplyInsets()
     }
     override fun onResume() {
         super.onResume()
@@ -614,7 +635,7 @@ class MainActivity : Activity(), LocationListener {
         val tolerance = EditText(this).apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER; setText(current.pairToleranceMillis.toString()) }
         form.addView(tolerance)
         val dialog = android.app.AlertDialog.Builder(this).setTitle("Equipment geometry")
-            .setView(form).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
+            .setView(ScrollView(this).apply { addView(form) }).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
         dialog.setOnShowListener {
             dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val distance = offset.text.toString().toDoubleOrNull()
@@ -901,7 +922,7 @@ class MainActivity : Activity(), LocationListener {
                 "SOUNDER • ${if (HydroLive.sounderConnected) "Connected" else "Disconnected"}\n" +
                 "NAVD88 bottom • withheld: no verified vertical transformation"
             val red = Color.rgb(151, 49, 49)
-            val amber = Color.rgb(164, 107, 20)
+            val amber = Color.rgb(156, 100, 16)
             val green = Color.rgb(21, 119, 78)
             val gnssConnected = gnss.getString("state", "") == "connected"
             gnssStatusButton.text = "GNSS • " + when {
@@ -940,8 +961,8 @@ class MainActivity : Activity(), LocationListener {
         } else {
             gnssStatusButton.text = "DEMO GNSS • " + if (demoGnss) "Simulated connected" else "Disconnected"
             sounderStatusButton.text = "DEMO sounder • " + if (demoSounder) "Simulated connected" else "Disconnected"
-            gnssStatusButton.setBackgroundColor(Color.rgb(164, 107, 20))
-            sounderStatusButton.setBackgroundColor(Color.rgb(164, 107, 20))
+            gnssStatusButton.setBackgroundColor(Color.rgb(156, 100, 16))
+            sounderStatusButton.setBackgroundColor(Color.rgb(156, 100, 16))
             surveySummary.text = "DEMO • Synthetic observations only"
             liveDepth.text = "DEMO • Live measurements hidden"
             liveRecording.text = "DEMO • Synthetic recording controls below"
