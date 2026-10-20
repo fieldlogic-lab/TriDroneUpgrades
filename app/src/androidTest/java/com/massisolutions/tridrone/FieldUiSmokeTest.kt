@@ -6,7 +6,10 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
+import android.view.PixelCopy
 import android.widget.Spinner
 import android.widget.TextView
 import androidx.core.graphics.ColorUtils
@@ -37,6 +40,7 @@ import org.junit.runner.RunWith
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Real Android UI exercise. No GNSS/depth fixtures or fake sensor observations are injected. */
 @RunWith(AndroidJUnit4::class)
@@ -159,7 +163,9 @@ class FieldUiSmokeTest {
     private fun screenshot(name: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         awaitCommittedActivityFrame()
-        val bitmap = checkNotNull(instrumentation.uiAutomation.takeScreenshot()) { "Screenshot unavailable" }
+        // PixelCopy reads the rendered activity surface, excluding transient OS starting windows.
+        val bitmap = if (name == "survey-disconnected") captureActivityWindow()
+            else checkNotNull(instrumentation.uiAutomation.takeScreenshot()) { "Screenshot unavailable" }
         try {
             if (name == "survey-disconnected") requireVisibleSurveyFrame(bitmap)
             saveScreenshot(name, bitmap)
@@ -204,7 +210,29 @@ class FieldUiSmokeTest {
         }
         check(committed.await(5, TimeUnit.SECONDS)) { "Activity did not commit a screenshot frame within 5 seconds" }
         instrumentation.waitForIdleSync()
-        if (Build.VERSION.SDK_INT >= 29) instrumentation.uiAutomation.syncInputTransactions()
+    }
+
+    private fun captureActivityWindow(): Bitmap {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val copied = CountDownLatch(1)
+        val result = AtomicInteger(PixelCopy.ERROR_UNKNOWN)
+        var bitmap: Bitmap? = null
+        instrumentation.runOnMainSync {
+            val activity = ActivityLifecycleMonitorRegistry.getInstance()
+                .getActivitiesInStage(Stage.RESUMED).single()
+            val decor = activity.window.decorView
+            val destination = Bitmap.createBitmap(decor.width, decor.height, Bitmap.Config.ARGB_8888)
+            bitmap = destination
+            PixelCopy.request(activity.window, destination, { status ->
+                result.set(status)
+                copied.countDown()
+            }, Handler(Looper.getMainLooper()))
+        }
+        if (!copied.await(5, TimeUnit.SECONDS) || result.get() != PixelCopy.SUCCESS) {
+            bitmap?.recycle()
+            error("Rendered activity-window screenshot failed: PixelCopy status ${result.get()}")
+        }
+        return checkNotNull(bitmap)
     }
 
     private fun saveScreenshot(name: String, bitmap: Bitmap) {

@@ -35,7 +35,7 @@ jobs:
         with:
           gradle-version: "8.10.2"
       - name: Test, lint, and compile debug APK
-        run: gradle --no-daemon --continue :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+        run: gradle --no-daemon --continue :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
       - name: Upload validation reports
         if: always()
         uses: actions/upload-artifact@v4
