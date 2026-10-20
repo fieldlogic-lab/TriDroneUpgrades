@@ -12,8 +12,8 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Raw diagnostic capture only. No HydroLite protocol is assumed and no
- * observations are written to survey or demo session directories.
+ * Raw Bluetooth capture plus provisional eight-field decoder. Original bytes are retained.
+ * Numeric validity does not establish manufacturer protocol or hardware accuracy.
  */
 class SounderDiagnosticService : Service() {
     private val running = AtomicBoolean(false)
@@ -22,6 +22,7 @@ class SounderDiagnosticService : Service() {
     private val spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
     private fun status(state: String, detail: String = "") {
+        HydroLive.sounderConnection(state == "connected")
         prefs.edit().putString("state", state).putString("detail", detail).apply()
     }
 
@@ -65,7 +66,7 @@ class SounderDiagnosticService : Service() {
                 logFile = File(directory, "sounder_raw_${System.currentTimeMillis()}.bin")
                 prefs.edit().putString("file", logFile.absolutePath)
                     .putLong("bytes", 0L).putInt("frames", 0).remove("preview").apply()
-                status("connected", "Raw capture only; no survey depths")
+                status("connected", "Provisional field-2 meters decoder; hardware verification required")
                 val framer = DepthStreamDecoder()
                 var bytesTotal = 0L
                 var framesTotal = 0
@@ -79,8 +80,10 @@ class SounderDiagnosticService : Service() {
                             output.write(buffer, 0, count)
                             output.flush()
                             bytesTotal += count
+                            HydroLive.rawDepth(buffer, count)
                             val frames = framer.accept(buffer, count)
                             framesTotal += frames.size
+                            frames.forEach { frame -> HydroLive.frame(this, frame, System.currentTimeMillis(), SystemClock.elapsedRealtimeNanos()) }
                             prefs.edit().putLong("bytes", bytesTotal)
                                 .putInt("frames", framesTotal)
                                 .putString("preview", frames.lastOrNull()?.take(160) ?: "")
@@ -108,3 +111,4 @@ class SounderDiagnosticService : Service() {
         super.onDestroy()
     }
 }
+

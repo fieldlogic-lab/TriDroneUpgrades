@@ -25,6 +25,7 @@ class RtkService : Service() {
     private val prefs by lazy { getSharedPreferences("rtk_status", MODE_PRIVATE) }
     private val spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
     private fun report(state: String, detail: String = "") {
+        HydroLive.gnssConnection(state == "connected")
         prefs.edit().putString("state", state).putString("detail", detail).apply()
     }
     override fun onBind(intent: Intent?): IBinder? = null
@@ -86,6 +87,7 @@ class RtkService : Service() {
                             line.setLength(0)
                             if (!sentence.startsWith("$") || sentence.length > 256 || !NmeaGga.valid(sentence)) continue
                             val received = System.currentTimeMillis()
+                            HydroLive.gnssSentence(this, sentence, received, SystemClock.elapsedRealtimeNanos())
                             rawWriter?.write("$received,${sentence.replace(",", "\\,")}\n")
                             rawWriter?.flush()
                             count++
@@ -119,6 +121,7 @@ class RtkService : Service() {
         return START_NOT_STICKY
     }
     override fun onDestroy() {
+        HydroLive.gnssConnection(false)
         running.set(false)
         try { socket?.close() } catch (_: Exception) {}
         if (prefs.getString("state", "") != "error") report("disconnected", "Stopped")
@@ -205,21 +208,24 @@ class WifiRtkService : Service() {
                         output.write(RtkCoordinateExport.header)
                         while (running.get()) {
                             try {
+                                HydroLive.gnssConnection(false)
                                 prefs.edit().putString("state", "connecting")
                                     .putString("detail", "$host:$port")
-                                    .remove("last_fix_ms").apply()
+                                    .remove("last_fix_ms").remove("gst_received_ms").remove("h_sigma_m").remove("v_sigma_m").apply()
                                 val socket = java.net.Socket()
                                 tcp = socket
                                 socket.connect(java.net.InetSocketAddress(host, port), 7000)
                                 socket.soTimeout = 12000
+                                HydroLive.gnssConnection(true)
                                 prefs.edit().putString("state", "connected").putString("detail", "Wi-Fi TCP $host:$port")
                                     .putString("transport", "wifi").putString("session", session)
-                                    .remove("last_fix_ms").apply()
+                                    .remove("last_fix_ms").remove("gst_received_ms").remove("h_sigma_m").remove("v_sigma_m").apply()
                                 socket.getInputStream().bufferedReader().use { reader ->
                                     while (running.get()) {
                                         val sentence = reader.readLine() ?: throw java.io.EOFException("NMEA stream closed")
                                         if (sentence.length > 256 || !sentence.startsWith("$") || !NmeaGga.valid(sentence)) continue
                                         val received = System.currentTimeMillis()
+                                        HydroLive.gnssSentence(this, sentence, received, SystemClock.elapsedRealtimeNanos())
                                         raw.write("$received,${sentence.replace(",", "\\,")}\n")
                                         raw.flush()
                                         count++
@@ -241,8 +247,9 @@ class WifiRtkService : Service() {
                                     }
                                 }
                             } catch (e: Exception) {
+                                HydroLive.gnssConnection(false)
                                 if (running.get()) prefs.edit().putString("state", "reconnecting")
-                                    .putString("detail", e.message ?: "Connection lost").remove("last_fix_ms").apply()
+                                    .putString("detail", e.message ?: "Connection lost").remove("last_fix_ms").remove("gst_received_ms").remove("h_sigma_m").remove("v_sigma_m").apply()
                             } finally {
                                 try { tcp?.close() } catch (_: Exception) {}
                                 tcp = null
@@ -262,9 +269,11 @@ class WifiRtkService : Service() {
         return START_NOT_STICKY
     }
     override fun onDestroy() {
+        HydroLive.gnssConnection(false)
         running.set(false)
         try { tcp?.close() } catch (_: Exception) {}
-        prefs.edit().putString("state", "disconnected").remove("last_fix_ms").apply()
+        prefs.edit().putString("state", "disconnected").remove("last_fix_ms").remove("gst_received_ms").remove("h_sigma_m").remove("v_sigma_m").apply()
         super.onDestroy()
     }
 }
+
