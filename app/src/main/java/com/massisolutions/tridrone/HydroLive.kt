@@ -28,6 +28,15 @@ object HydroLive {
     @Volatile var eventCount = 0; private set
     @Volatile var error = ""; private set
 
+    /** Immutable, short read of existing state; rendering and file reads never run under this lock. */
+    data class MapSnapshot(val file: File?, val position: MapPosition?, val quality: Int)
+    @Synchronized fun mapSnapshot(nowNanos: Long): MapSnapshot {
+        val fix = gnss.latest?.takeIf { gnss.connected && it.quality in 1..5 &&
+            nowNanos - it.elapsedNanos in 0..5_000_000_000L }
+        val position = fix?.let { MapPosition(it.latitude, it.longitude, it.receivedUtcMillis) }?.takeIf { it.valid }
+        return MapSnapshot(file, position, fix?.quality ?: 0)
+    }
+
     fun equipmentFile(c: Context) = File(c.filesDir, "equipment.properties")
     @Synchronized fun ownsGnss(source: String) = gnss.owns(source)
     @Synchronized fun claimGnss(source: String) {

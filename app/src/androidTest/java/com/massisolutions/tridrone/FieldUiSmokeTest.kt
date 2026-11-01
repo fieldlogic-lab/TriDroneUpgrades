@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
+import android.os.SystemClock
 import android.os.Looper
 import android.provider.MediaStore
 import android.view.PixelCopy
@@ -42,7 +43,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Real Android UI exercise. No GNSS/depth fixtures or fake sensor observations are injected. */
+/** Real Android UI exercise. The saved-map test uses an explicitly simulated, isolated CSV fixture. */
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class FieldUiSmokeTest {
@@ -148,6 +149,60 @@ class FieldUiSmokeTest {
         } finally {
             if (original == null) file.delete() else file.writeBytes(original)
         }
+    }
+
+    @Test fun savedSurveyMapFramesInspectsAndSuspendsFollowOnManualMovement() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val folder = File(context.filesDir, "hydro_surveys").apply { mkdirs() }
+        val file = File(folder, "hydro_map_smoke.csv")
+        check(!file.exists()) { "Smoke fixture must never overwrite records" }
+        file.bufferedWriter().use { out ->
+            out.write(HydroCsv.header)
+            repeat(3) { i ->
+                val time = 1000L + i
+                val depth = HydroLiteDecoder.decode("1 0.93 0 0 0 11 100 0", time, time * 1_000_000)
+                val gnss = HydroGnss("simulated map smoke", time, time * 1_000_000,
+                    40.8 + i * 0.0001, -73.05, if (i == 1) 5 else 4, 10.0, 0.01, 0.02, "120000")
+                out.write(HydroCsv.row(depth, gnss, EquipmentSettings(), "UNKNOWN"))
+            }
+        }
+        try {
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                onView(withText("Live Survey Map")).perform(scrollTo(), click())
+                onView(withText("Free Pan")).inRoot(isDialog()).check(matches(isDisplayed()))
+                screenshot("live-map-disconnected")
+                onView(withText("Close")).inRoot(isDialog()).perform(click())
+                scenario.onActivity { HydroSurveyMapDialog(it, file).show() }
+                // Await the worker's first committed survey without blocking the main/acquisition thread.
+                val deadline = System.currentTimeMillis() + 5000
+                var loaded = false
+                while (!loaded && System.currentTimeMillis() < deadline) {
+                    InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                    try {
+                        onView(allOf(isAssignableFrom(TextView::class.java), withText(containsString("3 soundings"))))
+                            .inRoot(isDialog()).check(matches(isDisplayed()))
+                        loaded = true
+                    } catch (_: Throwable) { loaded = false; SystemClock.sleep(50) }
+                }
+                assertTrue("Saved map worker must load recorded soundings", loaded)
+                onView(withText("Fit Survey")).inRoot(isDialog()).perform(click())
+                screenshot("saved-map-fit")
+                onView(isAssignableFrom(SurveyMapView::class.java)).inRoot(isDialog()).perform(click())
+                onView(withText("Recorded sounding 2")).inRoot(isDialog()).check(matches(isDisplayed()))
+                onView(withText(containsString("RTK FLOAT"))).inRoot(isDialog()).check(matches(isDisplayed()))
+                screenshot("sounding-float-details")
+                onView(withText("Close")).inRoot(isDialog()).perform(click())
+                onView(withText("Follow Vessel")).inRoot(isDialog()).perform(click())
+                onView(withText(startsWith("Follow Vessel •"))).inRoot(isDialog()).check(matches(isDisplayed()))
+                onView(isAssignableFrom(SurveyMapView::class.java)).inRoot(isDialog())
+                    .perform(androidx.test.espresso.action.ViewActions.swipeLeft())
+                onView(withText(startsWith("Free Pan •"))).inRoot(isDialog()).check(matches(isDisplayed()))
+                onView(withText("Fit Survey")).inRoot(isDialog()).perform(click())
+                onView(withText("Follow Vessel")).inRoot(isDialog()).perform(click())
+                onView(withText(startsWith("Follow Vessel •"))).inRoot(isDialog()).check(matches(isDisplayed()))
+                onView(withText("Close")).inRoot(isDialog()).perform(click())
+            }
+        } finally { file.delete() }
     }
 
     private fun openEquipmentSettings() {

@@ -478,6 +478,10 @@ class MainActivity : Activity(), LocationListener {
         surveyPage.addView(liveRecording)
         (setupNext.parent as? android.view.ViewGroup)?.removeView(setupNext)
         surveyPage.addView(setupNext)
+        surveyPage.addView(action("Live Survey Map") {
+            if (demoMode) Toast.makeText(this, "Switch to Live for the hardware survey map", Toast.LENGTH_LONG).show()
+            else HydroSurveyMapDialog(this).show()
+        })
         (modeLabel.parent as? android.view.ViewGroup)?.removeView(modeLabel)
         surveyPage.addView(modeLabel)
         (demoStatus.parent as? android.view.ViewGroup)?.removeView(demoStatus)
@@ -662,6 +666,19 @@ class MainActivity : Activity(), LocationListener {
         android.app.AlertDialog.Builder(this).setTitle("Live hydrographic recordings")
             .setItems(files.map { it.name }.toTypedArray()) { _, index ->
                 val file = files[index]
+                val choices = arrayOf("Open survey map", "Review recorded events", "Export CSV", "Export audit ZIP")
+                android.app.AlertDialog.Builder(this).setTitle(file.name).setItems(choices) { _, choice ->
+                    when (choice) {
+                        0 -> HydroSurveyMapDialog(this, file).show()
+                        1 -> showHydroEvents(file)
+                        2 -> exportFile(file)
+                        3 -> exportHydroAudit(file)
+                    }
+                }.setNegativeButton("Close", null).show()
+            }.setPositiveButton("Close", null).show()
+    }
+
+    private fun showHydroEvents(file: File) {
                 val view = ScrollView(this).apply { addView(TextView(this@MainActivity).apply {
                     setPadding(20, 20, 20, 20); setTextIsSelectable(true)
                     text = "PROVISIONAL HYDROLITE DECODER • NAVD88 WITHHELD\nRaw/processed events (first 100):\n" + file.useLines { it.take(101).joinToString("\n") }
@@ -669,7 +686,6 @@ class MainActivity : Activity(), LocationListener {
                 android.app.AlertDialog.Builder(this).setTitle(file.name).setView(view)
                     .setPositiveButton("Close", null).setNeutralButton("Export CSV") { _, _ -> exportFile(file) }
                     .setNegativeButton("Export audit ZIP") { _, _ -> exportHydroAudit(file) }.show()
-            }.setPositiveButton("Close", null).show()
     }
 
     private fun exportHydroAudit(file: File) {
@@ -1019,6 +1035,18 @@ class MainActivity : Activity(), LocationListener {
         sessions.text = if (file == null) "No CSV session found" else
             "${file.name}\n${file.length()} bytes"
     }
+    private fun mapNavigation(map: SurveyMapView): LinearLayout = LinearLayout(this).apply {
+        fun control(label: String, action: () -> Unit) {
+            addView(Button(this@MainActivity).apply {
+                text = label; isAllCaps = false; minHeight = dp(48)
+                setOnClickListener { action() }
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        control("Fit Survey") { map.fitSurvey() }
+        control("Follow Vessel") { map.followVessel() }
+        control("Free Pan") { map.freePan() }
+    }
+
     private fun showLiveRtkMap() {
         val map = SurveyMapView(this)
         val statusLabel = TextView(this).apply {
@@ -1027,6 +1055,7 @@ class MainActivity : Activity(), LocationListener {
         }
         val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         container.addView(statusLabel)
+        container.addView(mapNavigation(map))
         container.addView(map, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             (resources.displayMetrics.heightPixels * 0.62f).toInt()
@@ -1115,6 +1144,7 @@ class MainActivity : Activity(), LocationListener {
             setPadding(12, 12, 12, 12)
         })
         val map = SurveyMapView(this)
+        container.addView(mapNavigation(map))
         map.tracks = listOf(samples.map { Pair(it.first, it.second) })
         map.current = null
         container.addView(map, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.48f).toInt()))
@@ -1141,11 +1171,12 @@ class MainActivity : Activity(), LocationListener {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val info = TextView(this).apply {
             text = "All saved tracks: " + sessions.size + "  |  Recorded points: " + tracks.sumOf { it.size } +
-                "\nBlue: latest track  •  Gray: earlier tracks  •  Green: phone GPS position"
+                "\nBlue: latest track  •  Gray: earlier tracks  •  Blue dot: phone GPS position"
             textSize = 14f
             setPadding(20, 16, 20, 12)
         }
         box.addView(info)
+        box.addView(mapNavigation(view))
         box.addView(view, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.55f).toInt()))
         view.tracks = tracks
         fun refreshMap() {

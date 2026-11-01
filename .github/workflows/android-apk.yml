@@ -2,11 +2,11 @@ name: Build TriDrone Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [feature/issue-7-live-hydrography]
+    branches: [feature/issue-7-live-hydrography, feature/live-survey-map-v2]
 
 jobs:
   build:
-    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref == 'refs/heads/feature/issue-7-live-hydrography')
+    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && (github.ref == 'refs/heads/feature/issue-7-live-hydrography' || github.ref == 'refs/heads/feature/live-survey-map-v2'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -60,6 +60,15 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
       - name: Verify APK signature
         run: '"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk'
+      - name: Verify Build 1092 installation compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$APK" > "$RUNNER_TEMP/signature.txt"
+          grep -Fq 'Signer #1 certificate SHA-256 digest: d2d543fe2518073124fd01d5bdcb971cc1ab034149dcce8aa99e71a98b983d52' "$RUNNER_TEMP/signature.txt"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" > "$RUNNER_TEMP/badging.txt"
+          python3 .github/scripts/verify-apk-compatibility.py "$RUNNER_TEMP/badging.txt"
       - name: Identify installable test build
         shell: bash
         run: |
