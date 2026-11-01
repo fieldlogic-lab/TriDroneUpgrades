@@ -366,6 +366,7 @@ class MainActivity : Activity(), LocationListener {
         setupNext.minHeight = dp(72)
         setupNext.textSize = 20f
         captureCard.addView(setupNext)
+        captureCard.addView(action("Live sounding coverage map") { showSoundingCoverageMap() })
         captureCard.addView(heading("Live records provisional soundings and quality flags. NAVD88 elevations require verified vertical control. Demo observations remain separate.", 13f, muted))
         val reviewCard = section("SESSIONS & REVIEW", "Inspect observations after recovery")
         reviewCard.addView(action("Live hydrographic recordings") { showHydroSessions() })
@@ -1019,6 +1020,68 @@ class MainActivity : Activity(), LocationListener {
         sessions.text = if (file == null) "No CSV session found" else
             "${file.name}\n${file.length()} bytes"
     }
+    /** Read-only map of actual sounder events, separate from the GNSS navigation diagnostic. */
+    private fun showSoundingCoverageMap() {
+        val map = SurveyMapView(this)
+        val statusLabel = TextView(this).apply {
+            textSize = 15f
+            setPadding(20, 12, 20, 12)
+        }
+        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        panel.addView(statusLabel)
+        panel.addView(map, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (resources.displayMetrics.heightPixels * 0.58f).toInt()
+        ))
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Recorded sounding coverage")
+            .setView(panel).setPositiveButton("Close", null).create()
+        var previousSize = -1L
+        var previousFile = ""
+        val tick = object : Runnable {
+            override fun run() {
+                if (!dialog.isShowing) return
+                try {
+                    val folder = File(filesDir, "hydro_surveys")
+                    val file = folder.listFiles { f ->
+                        f.isFile && f.name.startsWith("hydro_") && f.name.endsWith(".csv") &&
+                            !f.name.endsWith(".gnss.csv")
+                    }?.maxByOrNull { it.name }
+                    if (file == null) {
+                        map.coverage = emptyList()
+                        statusLabel.text = "No soundings recorded yet. Start a live survey to create coverage."
+                    } else if (file.name != previousFile || file.length() != previousSize) {
+                        previousFile = file.name
+                        previousSize = file.length()
+                        // Never read a large recording on the UI thread; request a short bounded tail
+                        // for the live preview. Full export stays in the original CSV.
+                        if (file.length() > 2_000_000L) {
+                            statusLabel.text = "Recording exceeds preview limit. Original data is safe; use CSV export."
+                            map.coverage = emptyList()
+                        } else {
+                            val lines = file.readLines()
+                            val header = lines.firstOrNull().orEmpty()
+                            val samples = lines.drop(1).mapNotNull { SoundingCoverage.read(header, it) }
+                            map.coverage = samples.filter { it.usableDepth }.takeLast(5000)
+                            val fixes = samples.count { it.usableDepth && it.fix }
+                            val floats = samples.count { it.usableDepth && it.float }
+                            statusLabel.text = "${file.name} • ${samples.size} positioned events\\n" +
+                                "Valid coverage: ${fixes} FIX, ${floats} FLOAT; " +
+                                "${samples.count { !it.usableDepth }} flagged/noncoverage\\n" +
+                                "Read-only offline plot • no basemap • raw file unchanged"
+                        }
+                    }
+                } catch (e: Exception) {
+                    statusLabel.text = "Map preview unavailable: ${e.message}. Recording is unaffected."
+                }
+                handler.postDelayed(this, 1000L)
+            }
+        }
+        dialog.setOnShowListener { handler.post(tick) }
+        dialog.setOnDismissListener { handler.removeCallbacks(tick) }
+        dialog.show()
+    }
+
     private fun showLiveRtkMap() {
         val map = SurveyMapView(this)
         val statusLabel = TextView(this).apply {
