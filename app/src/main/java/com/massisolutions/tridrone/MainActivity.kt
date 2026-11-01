@@ -478,6 +478,10 @@ class MainActivity : Activity(), LocationListener {
         surveyPage.addView(liveRecording)
         (setupNext.parent as? android.view.ViewGroup)?.removeView(setupNext)
         surveyPage.addView(setupNext)
+        surveyPage.addView(action("Live Survey Map") {
+            if (demoMode) Toast.makeText(this, "Switch to Live for the hardware survey map", Toast.LENGTH_LONG).show()
+            else HydroSurveyMapDialog(this).show()
+        })
         (modeLabel.parent as? android.view.ViewGroup)?.removeView(modeLabel)
         surveyPage.addView(modeLabel)
         (demoStatus.parent as? android.view.ViewGroup)?.removeView(demoStatus)
@@ -662,6 +666,19 @@ class MainActivity : Activity(), LocationListener {
         android.app.AlertDialog.Builder(this).setTitle("Live hydrographic recordings")
             .setItems(files.map { it.name }.toTypedArray()) { _, index ->
                 val file = files[index]
+                val choices = arrayOf("Open survey map", "Review recorded events", "Export CSV", "Export audit ZIP")
+                android.app.AlertDialog.Builder(this).setTitle(file.name).setItems(choices) { _, choice ->
+                    when (choice) {
+                        0 -> HydroSurveyMapDialog(this, file).show()
+                        1 -> showHydroEvents(file)
+                        2 -> exportFile(file)
+                        3 -> exportHydroAudit(file)
+                    }
+                }.setNegativeButton("Close", null).show()
+            }.setPositiveButton("Close", null).show()
+    }
+
+    private fun showHydroEvents(file: File) {
                 val view = ScrollView(this).apply { addView(TextView(this@MainActivity).apply {
                     setPadding(20, 20, 20, 20); setTextIsSelectable(true)
                     text = "PROVISIONAL HYDROLITE DECODER • NAVD88 WITHHELD\nRaw/processed events (first 100):\n" + file.useLines { it.take(101).joinToString("\n") }
@@ -669,7 +686,6 @@ class MainActivity : Activity(), LocationListener {
                 android.app.AlertDialog.Builder(this).setTitle(file.name).setView(view)
                     .setPositiveButton("Close", null).setNeutralButton("Export CSV") { _, _ -> exportFile(file) }
                     .setNegativeButton("Export audit ZIP") { _, _ -> exportHydroAudit(file) }.show()
-            }.setPositiveButton("Close", null).show()
     }
 
     private fun exportHydroAudit(file: File) {
