@@ -85,13 +85,15 @@ class HydroSurveyMapDialog(private val activity: Activity, private val savedSurv
                 try {
                     val live = HydroLive.mapSnapshot(SystemClock.elapsedRealtimeNanos())
                     val selectedFile = savedSurvey ?: live.file ?: lastRecordedFile()
-                    if (selectedFile != readerFile) {
+                    val selectionChanged = selectedFile != readerFile
+                    if (selectionChanged) {
                         readerFile = selectedFile
                         reader = selectedFile?.let { HydroSurveyMapReader(it) }
                     }
                     val data = reader?.refresh() ?: HydroMapData()
                     handler.post {
                         if (!closed) {
+                            if (selectionChanged) map.beginSurvey()
                             map.showSurvey(data, if (savedSurvey == null) live.position else null)
                             status.text = "${selectedFile?.name ?: "No recorded survey yet"}\n" +
                                 "${data.track.size} track vertices • ${data.soundings.size} soundings • ${data.omittedEvents} events without plottable sounding\n" +

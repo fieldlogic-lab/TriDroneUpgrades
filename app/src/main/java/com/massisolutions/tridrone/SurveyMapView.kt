@@ -24,12 +24,14 @@ class SurveyMapView(context: Context) : View(context) {
     private var floatPath = Path()
     private var otherPath = Path()
     private var dirty = true
+    private var legacyAutoFrame = true
     private val density = resources.displayMetrics.density
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var legacyTracks: List<List<MapPosition>> = emptyList()
     var tracks: List<List<Pair<Double, Double>>> = emptyList()
         set(value) {
             field = value
+            legacyAutoFrame = true
             legacyTracks = value.map { track -> track.map { MapPosition(it.first, it.second) }.filter { it.valid } }
             recorded = legacyTracks.flatten(); refresh()
         }
@@ -61,7 +63,9 @@ class SurveyMapView(context: Context) : View(context) {
         }
     })
 
+    fun beginSurvey() { viewport.beginSurvey(); dirty = true }
     fun showSurvey(data: HydroMapData, live: MapPosition?) {
+        legacyAutoFrame = false
         recorded = data.track
         legacyTracks = listOf(recorded)
         soundingData = data.soundings
@@ -75,7 +79,10 @@ class SurveyMapView(context: Context) : View(context) {
     fun followVessel() { viewport.follow(live()); moved() }
     fun freePan() { viewport.freePan(); moved() }
     private fun live() = current?.let { MapPosition(it.first, it.second) }
-    private fun refresh() { viewport.receive(recorded, live()); dirty = true; invalidate() }
+    private fun refresh() {
+        if (legacyAutoFrame) viewport.receiveLegacy(recorded, live()) else viewport.receive(recorded, live())
+        dirty = true; invalidate()
+    }
     private fun moved() { dirty = true; invalidate(); onModeChanged?.invoke() }
     private fun pixelsPerDegree() = minOf(width, height).coerceAtLeast(1).toDouble() / viewport.span
     private fun px(point: MapPosition) = (width / 2.0 + viewport.x(point) * pixelsPerDegree()).toFloat()

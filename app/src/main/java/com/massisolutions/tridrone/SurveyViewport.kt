@@ -12,7 +12,19 @@ class SurveyViewport {
     var span = 0.0001; private set
     var initialized = false; private set
     private var initialFramePending = true
+    private var operatorOwnsNavigation = false
+
+    /** A new recorded session may frame automatically until the operator takes control. */
+    fun beginSurvey() {
+        if (!operatorOwnsNavigation) { initialized = false; initialFramePending = true }
+    }
     val longitudeScale get() = cos(Math.toRadians(latitude)).coerceAtLeast(0.01)
+
+    /** Preserve the established diagnostic auto-fit until an operator deliberately navigates. */
+    fun receiveLegacy(recorded: List<MapPosition>, current: MapPosition?) {
+        if (!operatorOwnsNavigation && recorded.any { it.valid }) fit(recorded + listOfNotNull(current))
+        else receive(recorded, current)
+    }
 
     fun receive(recorded: List<MapPosition>, current: MapPosition?) {
         if (initialFramePending && recorded.any { it.valid }) {
@@ -39,10 +51,10 @@ class SurveyViewport {
         return true
     }
     fun follow(current: MapPosition?) {
-        mode = Mode.FOLLOW_VESSEL; initialFramePending = false
+        mode = Mode.FOLLOW_VESSEL; initialFramePending = false; operatorOwnsNavigation = true
         if (current?.valid == true) center(current)
     }
-    fun freePan() { mode = Mode.FREE_PAN; initialFramePending = false }
+    fun freePan() { mode = Mode.FREE_PAN; initialFramePending = false; operatorOwnsNavigation = true }
     fun pan(dxDegrees: Double, dyDegrees: Double) {
         freePan()
         longitude = wrap(longitude + dxDegrees / longitudeScale)

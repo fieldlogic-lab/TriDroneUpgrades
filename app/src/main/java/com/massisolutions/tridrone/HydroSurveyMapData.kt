@@ -72,7 +72,8 @@ class HydroSurveyMapReader(private val survey: File) {
         }
         if (revision != snapshotRevision) {
             // Stable chronological ordering; duplicate epochs/positions remain recorded, redundant vertices are omitted only here.
-            val source = if (positions.isNotEmpty()) positions else fallback
+            // Pairing files may survive a partially missing raw GNSS log. Keep every recorded coordinate visible.
+            val source = positions + fallback
             var previous: MapPosition? = null
             val track = source.sortedBy { it.utcMillis }.filter { point ->
                 val keep = previous?.let { it.latitude != point.latitude || it.longitude != point.longitude } ?: true
@@ -117,7 +118,10 @@ private class CsvTail(private val file: File) {
                 val line = String(raw.toByteArray(Charsets.ISO_8859_1), Charsets.UTF_8)
                 if (pending.isNotEmpty()) pending.append('\n')
                 pending.append(line)
-                check(pending.length <= 1_048_576) { "Oversized map CSV record" }
+                if (pending.length > 1_048_576) {
+                    pending = StringBuilder()
+                    error("Oversized map CSV record")
+                }
                 val cells = parseCsvRecord(pending.toString()) ?: continue
                 pending = StringBuilder()
                 if (header == null) header = cells else {
