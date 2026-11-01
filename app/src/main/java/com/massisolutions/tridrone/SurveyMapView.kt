@@ -12,13 +12,15 @@ import kotlin.math.max
 class SurveyMapView(context: Context) : View(context) {
     var tracks: List<List<Pair<Double, Double>>> = emptyList()
         set(value) { field = value; invalidate() }
+    var coverage: List<SoundingCoverage.Point> = emptyList()
+        set(value) { field = value; invalidate() }
     var current: Pair<Double, Double>? = null
         set(value) { field = value; invalidate() }
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         canvas.drawColor(Color.rgb(238, 244, 247))
-        val all = tracks.flatten() + listOfNotNull(current)
+        val all = tracks.flatten() + listOfNotNull(current) + coverage.map { Pair(it.latitude, it.longitude) }
         if (all.isEmpty()) {
             paint.color = Color.DKGRAY
             paint.textSize = 38f
@@ -45,6 +47,10 @@ class SurveyMapView(context: Context) : View(context) {
             paint.strokeWidth = if (index == 0) 4f else 2f
             track.zipWithNext().forEach { (a, b) -> canvas.drawLine(px(a), py(a), px(b), py(b), paint) }
             track.forEach { canvas.drawCircle(px(it), py(it), 3f, paint) }
+        }
+        coverage.forEach { point ->
+            paint.color = if (point.fix) Color.rgb(21, 119, 78) else if (point.float) Color.rgb(198, 133, 17) else Color.rgb(113, 127, 145)
+            canvas.drawCircle(px(Pair(point.latitude, point.longitude)), py(Pair(point.latitude, point.longitude)), 4f, paint)
         }
         current?.let {
             paint.color = Color.WHITE
