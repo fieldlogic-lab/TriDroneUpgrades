@@ -2,7 +2,7 @@ name: Validate Android pull requests
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feature/issue-7-live-hydrography]
 
 permissions:
   contents: read
