@@ -12,17 +12,19 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Raw diagnostic capture only. No HydroLite protocol is assumed and no
- * observations are written to survey or demo session directories.
+ * Raw Bluetooth capture plus provisional eight-field decoder. Original bytes are retained.
+ * Numeric validity does not establish manufacturer protocol or hardware accuracy.
  */
 class SounderDiagnosticService : Service() {
+    private val hydroSource = UUID.randomUUID().toString()
     private val running = AtomicBoolean(false)
     private var socket: BluetoothSocket? = null
     private val prefs by lazy { getSharedPreferences("sounder_diagnostics", MODE_PRIVATE) }
     private val spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
     private fun status(state: String, detail: String = "") {
-        prefs.edit().putString("state", state).putString("detail", detail).apply()
+        HydroLive.sounderConnection(hydroSource, state == "connected")
+        synchronized(HydroLive) { if (HydroLive.ownsSounder(hydroSource)) prefs.edit().putString("state", state).putString("detail", detail).apply() }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -46,7 +48,11 @@ class SounderDiagnosticService : Service() {
             return START_NOT_STICKY
         }
         if (!running.compareAndSet(false, true)) return START_NOT_STICKY
+        val profiles = EquipmentProfiles(filesDir) { HydroLive.recording }
+        profiles.seedDefaults()
         val address = intent?.getStringExtra("address").orEmpty()
+        val profile = profiles.active()?.let { it.copy(connection = it.connection.copy(sounderAddress = address)) }
+        HydroLive.claimSounder(hydroSource, profile)
         Thread {
             var logFile: File? = null
             try {
@@ -57,15 +63,17 @@ class SounderDiagnosticService : Service() {
                 val adapter = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter
                     ?: throw IllegalStateException("Bluetooth unavailable")
                 val device = adapter.getRemoteDevice(address)
-                status("connecting", "Bluetooth RFCOMM SPP; protocol unverified")
+                status("connecting", "${profile?.name ?: "Sounder"}; Bluetooth RFCOMM SPP; protocol unverified")
                 val connection = device.createRfcommSocketToServiceRecord(spp)
                 socket = connection
                 connection.connect()
                 val directory = File(filesDir, "sounder_diagnostics").apply { mkdirs() }
                 logFile = File(directory, "sounder_raw_${System.currentTimeMillis()}.bin")
-                prefs.edit().putString("file", logFile.absolutePath)
-                    .putLong("bytes", 0L).putInt("frames", 0).remove("preview").apply()
-                status("connected", "Raw capture only; no survey depths")
+                synchronized(HydroLive) { if (HydroLive.ownsSounder(hydroSource)) prefs.edit().putString("file", logFile.absolutePath)
+                    .putLong("bytes", 0L).putInt("frames", 0).remove("preview").apply() }
+                status("connected", if (profile?.model == "CEE_LINE")
+                    "CEE-LINE raw capture only; Parani serial side 9600 baud; depth protocol unverified"
+                    else "Provisional field-2 meters decoder; hardware verification required")
                 val framer = DepthStreamDecoder()
                 var bytesTotal = 0L
                 var framesTotal = 0
@@ -79,12 +87,14 @@ class SounderDiagnosticService : Service() {
                             output.write(buffer, 0, count)
                             output.flush()
                             bytesTotal += count
+                            HydroLive.rawDepth(hydroSource, buffer, count)
                             val frames = framer.accept(buffer, count)
                             framesTotal += frames.size
-                            prefs.edit().putLong("bytes", bytesTotal)
+                            frames.forEach { frame -> HydroLive.frame(hydroSource, frame, System.currentTimeMillis(), SystemClock.elapsedRealtimeNanos()) }
+                            synchronized(HydroLive) { if (HydroLive.ownsSounder(hydroSource)) prefs.edit().putLong("bytes", bytesTotal)
                                 .putInt("frames", framesTotal)
                                 .putString("preview", frames.lastOrNull()?.take(160) ?: "")
-                                .apply()
+                                .apply() }
                         }
                     }
                 }
@@ -108,3 +118,4 @@ class SounderDiagnosticService : Service() {
         super.onDestroy()
     }
 }
+

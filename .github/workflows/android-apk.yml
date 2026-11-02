@@ -1,10 +1,12 @@
 name: Build TriDrone Android APK
 on:
   workflow_dispatch:
+  push:
+    branches: [feature/issue-7-live-hydrography]
 
 jobs:
   build:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref == 'refs/heads/feature/issue-7-live-hydrography')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -32,10 +34,14 @@ jobs:
             echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/tridrone.jks"
             echo "TRIDRONE_KEYSTORE_PATH=$RUNNER_TEMP/tridrone.jks" >> "$GITHUB_ENV"
           else
+            if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+              echo "::error::The signed test APK requires the established persistent signing secrets."
+              exit 1
+            fi
             echo "::warning::Persistent signing is not configured; in-place updates may fail."
           fi
-      - name: Run JVM regression tests
-        run: gradle --no-daemon :app:testDebugUnitTest
+      - name: Run JVM regression tests and lint
+        run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug
       - name: Upload unit-test diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -44,6 +50,7 @@ jobs:
           path: |
             app/build/reports/tests/testDebugUnitTest/
             app/build/test-results/testDebugUnitTest/
+            app/build/reports/lint-results-debug.*
           if-no-files-found: warn
       - name: Compile debug APK
         env:
@@ -51,15 +58,30 @@ jobs:
           TRIDRONE_KEY_ALIAS: ${{ secrets.TRIDRONE_KEY_ALIAS }}
           TRIDRONE_KEY_PASSWORD: ${{ secrets.TRIDRONE_KEY_PASSWORD }}
         run: gradle --no-daemon :app:assembleDebug
+      - name: Verify APK signature
+        run: '"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk'
+      - name: Identify installable test build
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/build/identified-apk
+          cp app/build/outputs/apk/debug/app-debug.apk "app/build/identified-apk/TriDrone-build-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}.apk"
+          {
+            echo "TriDrone test build $GITHUB_RUN_NUMBER"
+            echo "Version code: $((1000 + GITHUB_RUN_NUMBER))"
+            echo "Commit: $GITHUB_SHA"
+            echo "Source: $GITHUB_REF"
+            echo "Install the APK in this ZIP directly. The published in-app update feed does not deliver draft PR artifacts."
+          } > app/build/identified-apk/BUILD.txt
       - name: Publish installable debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: TriDrone-Logger-v0.1-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: TriDrone-Logger-build-${{ github.run_number }}
+          path: app/build/identified-apk/
           if-no-files-found: error
 
       - name: Publish signed update to this repository
-        if: ${{ env.TRIDRONE_KEYSTORE_PATH != '' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && env.TRIDRONE_KEYSTORE_PATH != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -87,3 +109,4 @@ jobs:
       - name: Report missing signing configuration
         if: ${{ env.TRIDRONE_KEYSTORE_PATH == '' }}
         run: echo "::warning::Set TRIDRONE_KEYSTORE_BASE64 and signing secrets to enable release publishing for approved manual runs."
+

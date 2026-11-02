@@ -12,7 +12,11 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()?.plus(1000) ?: 3
-        versionName = "0.3.0"
+        val testRun = System.getenv("GITHUB_RUN_NUMBER") ?: "local"
+        val sourceCommit = System.getenv("GITHUB_SHA")?.take(7) ?: "uncommitted"
+        versionName = "0.3.0-test.$testRun.$sourceCommit"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        resValue("string", "app_name", "TriDrone Logger")
     }
 
     signingConfigs {
@@ -28,6 +32,15 @@ android {
             if (!System.getenv("TRIDRONE_KEYSTORE_PATH").isNullOrBlank())
                 signingConfig = signingConfigs.getByName("persistentDebug")
         }
+        create("fieldTest") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".fieldtest"
+            versionNameSuffix = "-phone2"
+            resValue("string", "app_name", "TriDrone Field Test")
+            // Isolated test identity; never use the production update/signing path.
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("debug")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -39,4 +52,10 @@ android {
 dependencies {
     implementation("androidx.core:core:1.13.1")
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:core:1.6.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
 }
+
