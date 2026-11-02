@@ -202,6 +202,23 @@ class MainActivity : Activity(), LocationListener {
         }
         layout.addView(label("TRIDRONE  |  HYDROGRAPHIC SURVEY", 23f).apply { setTypeface(null, Typeface.BOLD) })
         layout.addView(label("GNSS acquisition  •  Offline  •  Field mode", 14f))
+        layout.addView(Button(this).apply {
+            text = "VERTICAL SETUP / EQUIPMENT PROFILES"
+            setOnClickListener {
+                if (HydroLive.recording || demoRecording) {
+                    Toast.makeText(this@MainActivity, "Stop recording before editing equipment", Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                val panel = VerticalSetupPanel(this@MainActivity,
+                    EquipmentProfiles(filesDir) { HydroLive.recording || demoRecording })
+                val scroll = ScrollView(this@MainActivity).apply { addView(panel) }
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Equipment calibration")
+                    .setView(scroll)
+                    .setPositiveButton("Close", null)
+                    .show()
+            }
+        })
         gpsBar = label("GNSS STATUS • SEARCHING", 19f).apply { setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE); setBackgroundColor(Color.DKGRAY); setPadding(20,20,20,20) }
         gpsMetrics = label("Horizontal: —\nVertical: —", 17f)
         layout.addView(gpsBar)
