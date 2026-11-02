@@ -83,7 +83,7 @@ class VerticalSetupPanel(context: Context, private val profiles: EquipmentProfil
         label("Unconfirmed settings may be saved for preparation. Corrected depths remain unavailable until geometry and calibration are confirmed. NAVD88 elevations remain unavailable without independently verified vertical control. Original observations and historical recordings are never recalculated.")
         profiles.seedDefaults()
         entries = profiles.all()
-        picker.adapter = adapter(entries.map { it.name })
+        picker.adapter = adapter(profileLabels())
         val index = entries.indexOfFirst { it.id == profiles.active()?.id }.coerceAtLeast(0)
         picker.setSelection(index)
         load(entries[index])
@@ -137,6 +137,10 @@ class VerticalSetupPanel(context: Context, private val profiles: EquipmentProfil
     }
     private fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
     private fun adapter(items: List<String>) = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, items)
+    private fun profileLabels() = entries.map { profile ->
+        val copyNumber = Regex("_import([0-9]+)$").find(profile.id)?.groupValues?.get(1)
+        if (copyNumber != null) "${profile.name} (imported copy $copyNumber)" else profile.name
+    }
     private fun heading(text: String, size: Float) = addView(TextView(context).apply {
         this.text = text; textSize = size; setTextColor(Color.rgb(15, 52, 72)); setPadding(0, dp(14), 0, dp(8))
         setTypeface(null, android.graphics.Typeface.BOLD)
@@ -211,7 +215,7 @@ class VerticalSetupPanel(context: Context, private val profiles: EquipmentProfil
             dirty = false
             entries = profiles.all()
             val index = entries.indexOfFirst { it.id == updated.id }
-            picker.adapter = adapter(entries.map { it.name }); picker.setSelection(index)
+            picker.adapter = adapter(profileLabels()); picker.setSelection(index)
             load(updated)
             Toast.makeText(context, "Using ${updated.name}. Reconnect sensors; historical data unchanged.", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {

@@ -182,6 +182,9 @@ class FieldUiSmokeTest {
                 val copies = store.all().filter { p -> p.id.contains("_import") }
                 assertEquals(2, copies.size)
                 assertTrue(copies.all { p -> !p.geometry.verified && !p.calibration.confirmed })
+                onView(withId(R.id.profile_picker)).inRoot(isDialog()).perform(scrollTo(), click())
+                onData(equalTo("TriDrone / HydroLite Plus (imported copy 1)")).inRoot(isPlatformPopup()).perform(click())
+                assertEquals("Viewing imported copies must not activate them", original, store.active())
                 screenshot("portable-profiles-imported")
                 onView(withText("Close")).inRoot(isDialog()).perform(click())
             }
