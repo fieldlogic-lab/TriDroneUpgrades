@@ -138,8 +138,12 @@ class VerticalSetupPanel(context: Context, private val profiles: EquipmentProfil
     private fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
     private fun adapter(items: List<String>) = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, items)
     private fun profileLabels() = entries.map { profile ->
-        val copyNumber = Regex("_import([0-9]+)$").find(profile.id)?.groupValues?.get(1)
-        if (copyNumber != null) "${profile.name} (imported copy $copyNumber)" else profile.name
+        val importedId = Regex(".*_import[0-9]+$")
+        if (importedId.matches(profile.id)) {
+            // Nested transfers may each end in _import1; rank all copies sharing this name.
+            val copies = entries.filter { it.name == profile.name && importedId.matches(it.id) }.sortedBy { it.id }
+            "${profile.name} (imported copy ${copies.indexOfFirst { it.id == profile.id } + 1})"
+        } else profile.name
     }
     private fun heading(text: String, size: Float) = addView(TextView(context).apply {
         this.text = text; textSize = size; setTextColor(Color.rgb(15, 52, 72)); setPadding(0, dp(14), 0, dp(8))

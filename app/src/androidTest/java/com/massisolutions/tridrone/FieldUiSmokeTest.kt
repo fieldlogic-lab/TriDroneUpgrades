@@ -187,6 +187,14 @@ class FieldUiSmokeTest {
                 assertEquals("Viewing imported copies must not activate them", original, store.active())
                 screenshot("portable-profiles-imported")
                 onView(withText("Close")).inRoot(isDialog()).perform(click())
+                // Transfer both an original and its imported copy, producing nested import IDs.
+                store.importProfiles(store.exportProfiles())
+                assertEquals(8, store.all().size)
+                openEquipmentSettings()
+                onView(withId(R.id.profile_picker)).inRoot(isDialog()).perform(scrollTo(), click())
+                onData(equalTo("TriDrone / HydroLite Plus (imported copy 3)")).inRoot(isPlatformPopup()).perform(click())
+                assertEquals("Nested imported copies remain inactive until saved", original, store.active())
+                onView(withText("Close")).inRoot(isDialog()).perform(click())
             }
         }
     }
