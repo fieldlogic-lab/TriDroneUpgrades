@@ -25,6 +25,8 @@ class MainActivity : Activity(), LocationListener {
     private var demoCount = 0
     private val demoRecorder by lazy { DemoSessionRecorder(this) }
     private val sessionsRepository by lazy { SessionRepository(filesDir) }
+    private val equipmentProfiles by lazy { EquipmentProfiles(filesDir) { HydroLive.recording || demoRecording } }
+    private lateinit var equipmentProfileStatus: TextView
     private var demoFile: File? = null
     private lateinit var modeLabel: TextView
     private lateinit var demoGnssButton: Button
@@ -190,6 +192,7 @@ class MainActivity : Activity(), LocationListener {
     private fun dp(value: Int) = (value * resources.displayMetrics.density + 0.5f).toInt()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        equipmentProfiles.seedDefaults()
         val root = ScrollView(this)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -202,23 +205,6 @@ class MainActivity : Activity(), LocationListener {
         }
         layout.addView(label("TRIDRONE  |  HYDROGRAPHIC SURVEY", 23f).apply { setTypeface(null, Typeface.BOLD) })
         layout.addView(label("GNSS acquisition  •  Offline  •  Field mode", 14f))
-        layout.addView(Button(this).apply {
-            text = "VERTICAL SETUP / EQUIPMENT PROFILES"
-            setOnClickListener {
-                if (HydroLive.recording || demoRecording) {
-                    Toast.makeText(this@MainActivity, "Stop recording before editing equipment", Toast.LENGTH_LONG).show()
-                    return@setOnClickListener
-                }
-                val panel = VerticalSetupPanel(this@MainActivity,
-                    EquipmentProfiles(filesDir) { HydroLive.recording || demoRecording })
-                val scroll = ScrollView(this@MainActivity).apply { addView(panel) }
-                android.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Equipment calibration")
-                    .setView(scroll)
-                    .setPositiveButton("Close", null)
-                    .show()
-            }
-        })
         gpsBar = label("GNSS STATUS • SEARCHING", 19f).apply { setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE); setBackgroundColor(Color.DKGRAY); setPadding(20,20,20,20) }
         gpsMetrics = label("Horizontal: —\nVertical: —", 17f)
         layout.addView(gpsBar)
@@ -394,7 +380,7 @@ class MainActivity : Activity(), LocationListener {
             } else exportLatest()
         })
         val toolsCard = section("SETTINGS & DIAGNOSTICS", "Advanced tools, configuration and tests")
-        toolsCard.addView(action("Antenna / transducer vertical offset") { showEquipmentSettings() })
+        toolsCard.addView(action("Vertical setup & equipment profiles") { showEquipmentSettings() })
         toolsCard.addView(action("Survey settings / coordinate systems") { showSurveySettings() })
         toolsCard.addView(action("Check for app updates") { AppUpdater.open(this@MainActivity) })
         toolsCard.addView(action("Live GNSS diagnostic map") { showLiveRtkMap() })
@@ -516,6 +502,9 @@ class MainActivity : Activity(), LocationListener {
         sessionsPage.addView(reviewCard)
         equipmentPage.addView(heading("EQUIPMENT", 12f, cyan))
         equipmentPage.addView(heading("Connections & diagnostics", 22f))
+        equipmentProfileStatus = heading("", 15f, Color.WHITE)
+        equipmentPage.addView(equipmentProfileStatus)
+        equipmentPage.addView(action("Vertical setup & equipment profiles") { showEquipmentSettings() }.apply { id = R.id.vertical_setup })
         (gnssCard.parent as? android.view.ViewGroup)?.removeView(gnssCard)
         equipmentPage.addView(gnssCard)
         (sounderCard.parent as? android.view.ViewGroup)?.removeView(sounderCard)
@@ -631,44 +620,84 @@ class MainActivity : Activity(), LocationListener {
         super.onDestroy()
     }
     private fun showEquipmentSettings() {
-        val current = EquipmentSettings.load(HydroLive.equipmentFile(this))
-        val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 20, 28, 20) }
-        form.addView(TextView(this).apply { text = "Vertical separation: selected GNSS reference to transducer acoustic reference, positive DOWN, US survey feet. No antenna calibration is automatically added. Match the receiver height reference before calculating elevations." })
-        val offset = EditText(this).apply {
-            hint = "Vertical offset in US survey feet (unset by default)"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(current.offsetUsft?.toString().orEmpty())
+        if (HydroLive.recording || demoRecording) {
+            Toast.makeText(this, "Stop recording before changing equipment", Toast.LENGTH_LONG).show()
+            return
         }
-        form.addView(offset)
-        val reference = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
-                listOf("Select antenna reference", "Physical antenna reference point (ARP)", "Configured receiver output reference"))
-            setSelection(EquipmentSettings.REFERENCES.indexOf(current.antennaReference) + 1)
-        }
-        form.addView(reference)
-        val confirmed = CheckBox(this).apply { text = "I verified offset and receiver height reference; no duplicate antenna correction"; isChecked = current.confirmed }
-        form.addView(confirmed)
-        form.addView(TextView(this).apply { text = "Pairing tolerance (milliseconds, 1–5000). Uses device receipt time; sensor latency remains unverified." })
-        val tolerance = EditText(this).apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER; setText(current.pairToleranceMillis.toString()) }
-        form.addView(tolerance)
-        val dialog = android.app.AlertDialog.Builder(this).setTitle("Equipment geometry")
-            .setView(ScrollView(this).apply { addView(form) }).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
-        dialog.setOnShowListener {
-            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val distance = offset.text.toString().toDoubleOrNull()
-                val ms = tolerance.text.toString().toLongOrNull()
-                if ((offset.text.isNotBlank() && (distance == null || !distance.isFinite() || distance < 0)) || ms == null || ms !in 1..5000 ||
-                    (confirmed.isChecked && (distance == null || reference.selectedItemPosition == 0))) {
-                    Toast.makeText(this, "Enter a nonnegative offset, reference and valid tolerance", Toast.LENGTH_LONG).show()
-                } else try {
-                    EquipmentSettings(distance, EquipmentSettings.REFERENCES.getOrNull(reference.selectedItemPosition - 1) ?: "UNSET", confirmed.isChecked, ms)
-                        .save(HydroLive.equipmentFile(this))
-                    Toast.makeText(this, "Saved; active recording retains its original configuration", Toast.LENGTH_LONG).show()
-                    dialog.dismiss()
-                } catch (e: Exception) { Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show() }
-            }
-        }
+        val form = VerticalSetupPanel(this, equipmentProfiles) { disconnectForProfileChange(); updateDisplay() }
+        val dialog = android.app.AlertDialog.Builder(this).setTitle("Equipment profiles")
+            .setView(ScrollView(this).apply { addView(form) }).setPositiveButton("Close", null)
+            .setNeutralButton("Transfer profiles") { _, _ -> showProfileTransfer() }
+            .create()
         dialog.show()
+    }
+    private fun showProfileTransfer() {
+        if (!mayChangeConnection()) return
+        android.app.AlertDialog.Builder(this).setTitle("Portable equipment profiles")
+            .setItems(arrayOf("Share profile file", "Import profile file", "Import pasted profile text")) { _, choice ->
+                when (choice) {
+                    0 -> try {
+                        val file = File(cacheDir, "tridrone-equipment-profiles.properties")
+                        file.writeText(equipmentProfiles.exportProfiles())
+                        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+                        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"; putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }, "Share equipment profiles"))
+                    } catch (e: Exception) { Toast.makeText(this, e.message, Toast.LENGTH_LONG).show() }
+                    1 -> startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        type = "*/*"; addCategory(Intent.CATEGORY_OPENABLE)
+                    }, 74)
+                    2 -> {
+                        val text = EditText(this).apply { hint = "Paste exported profile text"; minLines = 5; maxLines = 12 }
+                        android.app.AlertDialog.Builder(this).setTitle("Import profile copy")
+                            .setMessage("Adds copies without replacing existing profiles or active selection. Geometry and depth calibration require physical recheck on this installation.")
+                            .setView(text).setNegativeButton("Cancel", null)
+                            .setPositiveButton("Import copies") { _, _ -> importProfileText(text.text.toString()) }.show()
+                    }
+                }
+            }.setNegativeButton("Cancel", null).show()
+    }
+    private fun importProfileText(text: String) {
+        try {
+            val imported = equipmentProfiles.importProfiles(text)
+            Toast.makeText(this, "Imported ${imported.size} profile copies. Select one, remeasure, then Save & use.", Toast.LENGTH_LONG).show()
+            showEquipmentSettings()
+        } catch (e: Exception) { Toast.makeText(this, "Import failed: ${e.message}", Toast.LENGTH_LONG).show() }
+    }
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 74 || resultCode != RESULT_OK) return
+        try {
+            val uri = data?.data ?: return
+            val text = contentResolver.openInputStream(uri)?.bufferedReader()?.use { reader ->
+                val result = StringBuilder(); val buffer = CharArray(4096)
+                while (true) {
+                    val count = reader.read(buffer)
+                    if (count < 0) break
+                    require(result.length + count <= 128_000) { "Profile file is too large" }
+                    result.append(buffer, 0, count)
+                }
+                result.toString()
+            } ?: error("Cannot open profile file")
+            android.app.AlertDialog.Builder(this).setTitle("Import equipment profile copies?")
+                .setMessage("Existing profiles and active selection remain unchanged. Imported geometry and depth calibration must be physically rechecked.")
+                .setNegativeButton("Cancel", null).setPositiveButton("Import copies") { _, _ -> importProfileText(text) }.show()
+        } catch (e: Exception) { Toast.makeText(this, "Import failed: ${e.message}", Toast.LENGTH_LONG).show() }
+    }
+    private fun disconnectForProfileChange() {
+        HydroLive.equipmentChanged()
+        stopService(Intent(this, RtkService::class.java))
+        stopService(Intent(this, WifiRtkService::class.java))
+        stopService(Intent(this, SounderDiagnosticService::class.java))
+        getSharedPreferences("rtk_status", MODE_PRIVATE).edit().putString("state", "disconnected")
+            .remove("last_fix_ms").remove("h_sigma_m").remove("v_sigma_m").apply()
+        getSharedPreferences("sounder_diagnostics", MODE_PRIVATE).edit().putString("state", "disconnected").apply()
+    }
+    private fun mayChangeConnection(): Boolean {
+        if (!HydroLive.recording && !demoRecording) return true
+        Toast.makeText(this, "Stop recording before changing sensor connections", Toast.LENGTH_LONG).show()
+        return false
     }
 
     private fun showHydroSessions() {
@@ -756,6 +785,8 @@ class MainActivity : Activity(), LocationListener {
             }.show()
     }
     private fun showWifiRtkSetup() {
+        if (!mayChangeConnection()) return
+        val profile = equipmentProfiles.active() ?: return
         val prefs = getSharedPreferences("wifi_rtk_settings", MODE_PRIVATE)
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -766,19 +797,19 @@ class MainActivity : Activity(), LocationListener {
         })
         val host = EditText(this).apply {
             setSingleLine(); hint = "Receiver IP address"
-            setText(prefs.getString("host", ""))
+            setText(profile.connection.gnssHost)
         }
         val port = EditText(this).apply {
             setSingleLine(); hint = "NMEA TCP port"
             inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            setText(prefs.getInt("port", 0).takeIf { it > 0 }?.toString() ?: "")
+            setText(profile.connection.gnssPort.toString())
         }
         form.addView(host); form.addView(port)
         android.app.AlertDialog.Builder(this).setTitle("Emlid Wi-Fi NMEA")
             .setView(form)
             .setNegativeButton("Cancel", null)
             .setNeutralButton("Disconnect") { _, _ ->
-                stopService(Intent(this, WifiRtkService::class.java))
+                if (mayChangeConnection()) stopService(Intent(this, WifiRtkService::class.java))
             }
             .setPositiveButton("Connect") { _, _ ->
                 val h = host.text.toString().trim()
@@ -786,6 +817,9 @@ class MainActivity : Activity(), LocationListener {
                 if (h.isBlank() || p == null || p !in 1..65535) {
                     Toast.makeText(this, "Enter a receiver IP and TCP port", Toast.LENGTH_LONG).show()
                 } else {
+                    if (!mayChangeConnection()) return@setPositiveButton
+                    equipmentProfiles.save(profile.copy(connection = profile.connection.copy(
+                        gnssTransport = "TCP", gnssHost = h, gnssPort = p)))
                     prefs.edit().putString("host", h).putInt("port", p).apply()
                     stopService(Intent(this, RtkService::class.java))
                     startForegroundService(Intent(this, WifiRtkService::class.java)
@@ -803,6 +837,7 @@ class MainActivity : Activity(), LocationListener {
             requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 43)
             return
         }
+        val profile = equipmentProfiles.active() ?: return
         val prefs = getSharedPreferences("sounder_diagnostics", MODE_PRIVATE)
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -810,41 +845,46 @@ class MainActivity : Activity(), LocationListener {
         }
         val info = TextView(this).apply { textSize = 14f; setTextIsSelectable(true) }
         panel.addView(info)
-        val connect = Button(this).apply { text = "Connect paired sounder" }
+        val connect = Button(this).apply { text = "Connect paired sounder"; isEnabled = !HydroLive.recording }
         val stop = Button(this).apply { text = "Stop diagnostic capture" }
         val share = Button(this).apply { text = "Share raw capture" }
         panel.addView(connect)
         panel.addView(stop)
         panel.addView(share)
         val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle("HydroLite • raw diagnostics")
+            .setTitle("${profile.name} • raw diagnostics")
             .setView(panel).setPositiveButton("Close", null).create()
         val tick = object : Runnable {
             override fun run() {
-                if (!dialog.isShowing) return
+                if (!dialog.isShowing) { return }
                 info.text = "State: ${prefs.getString("state", "disconnected")}\n" +
                     "Detail: ${prefs.getString("detail", "")}\n" +
                     "Bytes: ${prefs.getLong("bytes", 0L)}\n" +
                     "ASCII frames: ${prefs.getInt("frames", 0)}\n" +
                     "Last ASCII frame: ${prefs.getString("preview", "—")}\n" +
-                    "Depth decoder provisional • open Survey to record"
+                    (if (profile.model == "CEE_LINE") "CEE-LINE / SD1000 • 9600 baud set on adapter; protocol unverified, raw capture only"
+                     else "HydroLite decoder provisional • open Survey to record")
                 handler.postDelayed(this, 1000)
             }
         }
         connect.setOnClickListener {
+            if (!mayChangeConnection()) return@setOnClickListener
             try {
                 val manager = getSystemService(BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager
                 val adapter = manager.adapter
                 if (adapter == null || !adapter.isEnabled) {
                     Toast.makeText(this, "Enable Bluetooth and pair the sounder first", Toast.LENGTH_LONG).show()
                 } else {
-                    val devices = adapter.bondedDevices.toList().sortedBy { it.name ?: it.address }
+                    val devices = adapter.bondedDevices.toList().sortedWith(compareBy({ it.address != profile.connection.sounderAddress }, { it.name ?: it.address }))
                     if (devices.isEmpty()) {
                         Toast.makeText(this, "No paired Bluetooth devices", Toast.LENGTH_LONG).show()
                     } else {
-                        val labels = devices.map { "${it.name ?: "Unknown"} (${it.address})" }.toTypedArray()
+                        val labels = devices.map { "${if (it.address == profile.connection.sounderAddress) "Saved • " else ""}${it.name ?: "Unknown"} (${it.address})" }.toTypedArray()
                         android.app.AlertDialog.Builder(this).setTitle("Select sounder Bluetooth device")
                             .setItems(labels) { _, index ->
+                                if (!mayChangeConnection()) return@setItems
+                                val active = equipmentProfiles.active() ?: return@setItems
+                                equipmentProfiles.save(active.copy(connection = active.connection.copy(sounderAddress = devices[index].address)))
                                 stopService(Intent(this, SounderDiagnosticService::class.java))
                                 startForegroundService(Intent(this, SounderDiagnosticService::class.java)
                                     .putExtra("address", devices[index].address))
@@ -856,7 +896,7 @@ class MainActivity : Activity(), LocationListener {
             }
         }
         stop.setOnClickListener {
-            stopService(Intent(this, SounderDiagnosticService::class.java))
+            if (mayChangeConnection()) stopService(Intent(this, SounderDiagnosticService::class.java))
         }
         share.setOnClickListener {
             val path = prefs.getString("file", null)
@@ -885,6 +925,8 @@ class MainActivity : Activity(), LocationListener {
     }
 
     private fun connectRtk() {
+        if (!mayChangeConnection()) return
+        val profile = equipmentProfiles.active() ?: return
         if (Build.VERSION.SDK_INT >= 31 &&
             checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 41)
@@ -897,7 +939,7 @@ class MainActivity : Activity(), LocationListener {
                 Toast.makeText(this, "Enable Bluetooth and pair Reach RS2+ in Android settings", Toast.LENGTH_LONG).show()
                 return
             }
-            val devices = adapter.bondedDevices.toList().sortedBy { it.name ?: it.address }
+            val devices = adapter.bondedDevices.toList().sortedWith(compareBy({ it.address != profile.connection.gnssAddress }, { it.name ?: it.address }))
             if (devices.isEmpty()) {
                 Toast.makeText(this, "No paired Bluetooth devices. Pair the RS2+ first.", Toast.LENGTH_LONG).show()
                 return
@@ -905,6 +947,9 @@ class MainActivity : Activity(), LocationListener {
             val labels = devices.map { (it.name ?: "Unknown") + " (" + it.address + ")" }.toTypedArray()
             android.app.AlertDialog.Builder(this).setTitle("Select paired RTK receiver")
                 .setItems(labels) { _, i ->
+                    if (!mayChangeConnection()) return@setItems
+                    val active = equipmentProfiles.active() ?: return@setItems
+                    equipmentProfiles.save(active.copy(connection = active.connection.copy(gnssTransport = "BLUETOOTH", gnssAddress = devices[i].address)))
                     val intent = Intent(this, RtkService::class.java).putExtra("address", devices[i].address)
                     try { stopService(Intent(this, WifiRtkService::class.java)); startForegroundService(intent) }
                     catch (e: Exception) { Toast.makeText(this, "RTK start failed: " + e.message, Toast.LENGTH_LONG).show() }
@@ -916,6 +961,12 @@ class MainActivity : Activity(), LocationListener {
     private fun latest(): File? = sessionsRepository.latest(SessionRepository.Kind.LIVE)
     private fun updateDisplay() {
         updateGnssPreview()
+        if (::equipmentProfileStatus.isInitialized) {
+            val profile = equipmentProfiles.active()
+            equipmentProfileStatus.text = "Profile: ${profile?.name ?: "None selected"}\n" +
+                (if (profile?.geometry?.usable == true && profile.calibration.usable) "Geometry / depth calibration confirmed" else "Geometry / depth calibration incomplete") +
+                " • NAVD88 control unverified"
+        }
         val gnss = getSharedPreferences("rtk_status", MODE_PRIVATE)
         val fixAge = System.currentTimeMillis() - gnss.getLong("last_fix_ms", 0L)
         val live = gnss.getString("state", "") == "connected" && fixAge in 0..5000
@@ -961,7 +1012,25 @@ class MainActivity : Activity(), LocationListener {
             // The eight-field protocol remains unverified even with a fresh numeric depth.
             sounderStatusButton.setBackgroundColor(if (HydroLive.sounderConnected) amber else red)
             val value = if (depthValid) String.format(Locale.US, "%.2f US survey ft", SurveyUnits.feet(reading!!.meters!!)) else "—"
-            liveDepth.text = "DEPTH  $value"
+            val selectedProfile = equipmentProfiles.active()
+            val boundProfile = HydroLive.depthProfile()
+            val matchingProfile = ProfileBinding.sounderMatches(selectedProfile, boundProfile)
+            val referenceLabel = when (boundProfile?.calibration?.depthReference) {
+                "ACOUSTIC_CENTER" -> "acoustic center"
+                "WATERLINE" -> "waterline"
+                else -> "reference unknown"
+            }
+            val correction = if (depthValid && matchingProfile)
+                ProfileDepthCorrection.calculate(reading!!, boundProfile) else null
+            fun fmt(depth: Double?) = depth?.let { String.format(Locale.US, "%.2f ftUS", it) } ?: "—"
+            liveDepth.textSize = 21f
+            liveDepth.text = "RAW DEPTH  $value\nSounder output: $referenceLabel\n" +
+                "Acoustic range: ${fmt(correction?.acousticDepthUsft)}\n" +
+                "Below waterline: ${fmt(correction?.belowWaterlineUsft)}\n" +
+                (if (correction?.acousticDepthUsft != null) "Provisional corrected depth • NAVD88 withheld"
+                 else if (depthValid && !matchingProfile) "Profile changed • reconnect sounder"
+                 else if (!depthValid) "Awaiting fresh sounder depth"
+                 else "Correction withheld • check profile calibration")
             liveDepth.setTextColor(when {
                 depthValid -> Color.rgb(89, 220, 145)
                 HydroLive.sounderConnected -> Color.rgb(255, 193, 72)
@@ -1057,7 +1126,7 @@ class MainActivity : Activity(), LocationListener {
             .create()
         val ticker = object : Runnable {
             override fun run() {
-                if (!dialog.isShowing) return
+                if (!dialog.isShowing) { return }
                 val p = getSharedPreferences("rtk_status", MODE_PRIVATE)
                 val timestamp = p.getLong("last_fix_ms", 0L)
                 val age = System.currentTimeMillis() - timestamp

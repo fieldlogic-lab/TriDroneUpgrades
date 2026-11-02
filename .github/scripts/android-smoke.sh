@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # Keep status and collection in one shell: emulator-runner executes script lines separately.
 set -u
+# These tests manipulate test fixtures and UI settings. Never target either field phone.
+export ANDROID_SERIAL="${ANDROID_SERIAL:-emulator-5554}"
+if [[ "$ANDROID_SERIAL" != emulator-* ]]; then
+  echo "UI smoke tests require an emulator serial; physical phones are not allowed."
+  exit 1
+fi
+if adb devices | awk 'NR>1 && $2 == "device" && $1 !~ /^emulator-/ { found=1 } END { exit !found }'; then
+  echo "Disconnect physical phones before running connected Android tests."
+  exit 1
+fi
 mkdir -p app/build/emulator-diagnostics
 adb logcat -c || true
 set +e
@@ -15,7 +25,7 @@ if [ "$test_result" -eq 0 ]; then
 import base64
 from pathlib import Path
 folder = Path('app/build/emulator-screenshots')
-for name in ('equipment-disconnected', 'survey-disconnected', 'survey-demo-explicit', 'equipment-settings-restored'):
+for name in ('equipment-disconnected', 'survey-disconnected', 'survey-demo-explicit', 'vertical-setup-measured', 'vertical-setup-cee-line'):
     if not (folder / f'{name}.png').is_file():
         raise SystemExit(f'Missing emulator screenshot: {name}')
 preview = base64.b64encode((folder / 'survey-disconnected-preview.png').read_bytes()).decode('ascii')

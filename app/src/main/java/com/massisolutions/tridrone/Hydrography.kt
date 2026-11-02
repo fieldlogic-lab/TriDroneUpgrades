@@ -8,6 +8,21 @@ object SurveyUnits {
     fun feet(meters: Double) = meters * US_FEET_PER_METER
 }
 
+/** Reserve a new session without overwriting recordings if the device clock repeats an old time. */
+object HydroSessionFiles {
+    fun reserveCsv(directory: File, utcMillis: Long): File {
+        check(directory.isDirectory || directory.mkdirs()) { "Cannot create survey directory" }
+        var suffix = 0
+        while (true) {
+            val stem = "hydro_$utcMillis" + if (suffix == 0) "" else "_$suffix"
+            val csv = File(directory, "$stem.csv")
+            val siblings = listOf(".metadata.json", ".gnss.csv", ".sounder.bin")
+            if (siblings.none { File(directory, stem + it).exists() } && csv.createNewFile()) return csv
+            suffix++
+        }
+    }
+}
+
 data class HydroDepth(val raw: String, val utcMillis: Long, val elapsedNanos: Long,
     val meters: Double?, val validity: String, val diagnostic: String) {
     val valid get() = validity == "VALID_PROVISIONAL"
@@ -37,6 +52,14 @@ object HydroLiteDecoder {
         return HydroDepth(raw, utcMillis, elapsedNanos, depth, state,
             "Unknown fields (1,3–8): " + fields.filterIndexed { i, _ -> i != 1 }.joinToString(" | "))
     }
+}
+
+object ProfileDepthDecoder {
+    fun decode(profile: SounderProfile?, raw: String, utcMillis: Long, elapsedNanos: Long): HydroDepth =
+        if (profile == null || profile.protocol == HydroLiteDecoder.PROTOCOL)
+            HydroLiteDecoder.decode(raw, utcMillis, elapsedNanos)
+        else HydroDepth(raw, utcMillis, elapsedNanos, null, "UNSUPPORTED_PROTOCOL",
+            "${profile.model}: raw serial capture only; framing, units and output reference require hardware verification")
 }
 
 data class EquipmentSettings(val offsetUsft: Double? = null, val antennaReference: String = "UNSET",
@@ -80,6 +103,44 @@ object BottomElevation {
     }
 }
 
+data class ProfileDepthResult(val acousticDepthUsft: Double?, val belowWaterlineUsft: Double?, val status: String)
+
+/** Normalize the instrument's declared output reference before applying calibration or geometry. */
+object ProfileDepthCorrection {
+    fun calculate(depth: HydroDepth, profile: SounderProfile?): ProfileDepthResult {
+        if (profile == null) return ProfileDepthResult(null, null, "WITHHELD_NO_PROFILE")
+        if (profile.protocol != HydroLiteDecoder.PROTOCOL)
+            return ProfileDepthResult(null, null, "WITHHELD_UNSUPPORTED_PROTOCOL")
+        if (!depth.valid || depth.meters == null || !depth.meters.isFinite() || depth.meters <= 0)
+            return ProfileDepthResult(null, null, "WITHHELD_INVALID_DEPTH")
+        val cal = profile.calibration
+        if (!cal.usable) return ProfileDepthResult(null, null, "WITHHELD_UNCONFIRMED_CALIBRATION_OR_REFERENCE")
+        val geometry = profile.geometry
+        val rawFeet = SurveyUnits.feet(depth.meters)
+        val range = when (cal.depthReference) {
+            "ACOUSTIC_CENTER" -> rawFeet
+            "WATERLINE" -> if (geometry.usable) rawFeet - geometry.sounderBelowWaterlineUsft!! else
+                return ProfileDepthResult(null, null, "WITHHELD_UNCONFIRMED_GEOMETRY")
+            else -> return ProfileDepthResult(null, null, "WITHHELD_UNKNOWN_DEPTH_REFERENCE")
+        }
+        val corrected = range * cal.scale + cal.offsetUsft
+        if (!range.isFinite() || range <= 0 || !corrected.isFinite() || corrected <= 0)
+            return ProfileDepthResult(null, null, "WITHHELD_INVALID_CORRECTED_DEPTH")
+        val waterline = if (geometry.usable) corrected + geometry.sounderBelowWaterlineUsft!! else null
+        return ProfileDepthResult(corrected, waterline,
+            if (waterline != null) "PROVISIONAL_PROFILE_CORRECTED" else "PROVISIONAL_ACOUSTIC_ONLY_GEOMETRY_UNCONFIRMED")
+    }
+
+    /** Waterline draft B is deliberately absent from the antenna-based elevation equation. */
+    fun bottomElevation(height: VerticalReference?, depth: HydroDepth, profile: SounderProfile): Double? {
+        val acoustic = calculate(depth, profile).acousticDepthUsft ?: return null
+        if (height == null || !profile.geometry.usable || !height.transformationVerified ||
+            height.datum != "EPSG:6360" || height.provenance.isBlank() || !height.elevationUsft.isFinite() ||
+            height.antennaReference != profile.geometry.reference) return null
+        return height.elevationUsft - profile.geometry.gpsToSounderUsft!! - acoustic
+    }
+}
+
 data class HydroGnss(val raw: String, val receivedUtcMillis: Long, val elapsedNanos: Long,
     val latitude: Double, val longitude: Double, val quality: Int, val altitudeMeters: Double?,
     val horizontalSigmaMeters: Double?, val verticalSigmaMeters: Double?, val receiverUtc: String,
@@ -112,13 +173,20 @@ object HydroCsv {
         "h_precision_usft", "v_precision_usft", "raw_gga_altitude_m", "raw_gga_height_reference", "raw_depth_m", "depth_usft",
         "vertical_offset_usft", "antenna_reference", "offset_confirmed", "bottom_navd88_usft", "horizontal_crs", "vertical_target",
         "horizontal_status", "vertical_status", "depth_validity", "pairing_status", "pair_delta_ms", "protocol", "raw_depth",
-        "raw_gnss", "precision_raw", "precision_received_utc_ms", "pair_tolerance_ms", "timestamp_basis")
+        "raw_gnss", "precision_raw", "precision_received_utc_ms", "pair_tolerance_ms", "timestamp_basis",
+        "equipment_profile_id", "equipment_profile_name", "equipment_sounder_model", "equipment_transport",
+        "gps_to_sounder_center_usft", "sounder_below_waterline_usft", "geometry_verified", "geometry_checked_utc_ms",
+        "depth_output_reference", "calibration_scale", "calibration_offset_usft", "calibration_confirmed",
+        "corrected_acoustic_depth_usft", "bottom_below_waterline_usft", "depth_correction_status",
+        "sounder_bluetooth_address", "gnss_bluetooth_address", "gnss_transport", "gnss_host", "gnss_port", "serial_baud")
     val header get() = columns.joinToString(",") + "\n"
     fun cell(value: Any?): String {
         val s = value?.toString().orEmpty()
         return if (s.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) "\"" + s.replace("\"", "\"\"") + "\"" else s
     }
-    fun row(depth: HydroDepth, gnss: HydroGnss?, equipment: EquipmentSettings, sourceCrs: String): String {
+    fun row(depth: HydroDepth, gnss: HydroGnss?, equipment: EquipmentSettings, sourceCrs: String,
+        profile: SounderProfile? = null): String {
+        val correction = ProfileDepthCorrection.calculate(depth, profile)
         val projected = if (sourceCrs == "EPSG:6318" && gnss?.quality == 4)
             StatePlane6539.projectNad83_2011(gnss.latitude, gnss.longitude) else null
         val horizontalStatus = when {
@@ -136,9 +204,17 @@ object HydroCsv {
             equipment.offsetUsft, equipment.antennaReference, equipment.confirmed, null, "EPSG:6539", "EPSG:6360",
             horizontalStatus, "WITHHELD_NO_VERIFIED_VERTICAL_TRANSFORM", depth.validity,
             if (gnss != null) "PAIRED_RECEIPT_TIME" else "MISSING_OR_STALE_GNSS",
-            gnss?.let { (depth.elapsedNanos - it.elapsedNanos) / 1_000_000.0 }, HydroLiteDecoder.PROTOCOL,
+            gnss?.let { (depth.elapsedNanos - it.elapsedNanos) / 1_000_000.0 }, profile?.protocol ?: HydroLiteDecoder.PROTOCOL,
             depth.raw, gnss?.raw, gnss?.precisionRaw, gnss?.precisionReceivedUtcMillis, equipment.pairToleranceMillis,
-            "DEVICE_RECEIPT_UTC_AND_MONOTONIC;SENSOR_LATENCY_UNVERIFIED")
+            "DEVICE_RECEIPT_UTC_AND_MONOTONIC;SENSOR_LATENCY_UNVERIFIED",
+            profile?.id, profile?.name, profile?.model, profile?.transport,
+            profile?.geometry?.gpsToSounderUsft, profile?.geometry?.sounderBelowWaterlineUsft,
+            profile?.geometry?.usable, profile?.checkedUtcMs,
+            profile?.calibration?.depthReference, profile?.calibration?.scale, profile?.calibration?.offsetUsft,
+            profile?.calibration?.confirmed, correction.acousticDepthUsft, correction.belowWaterlineUsft,
+            correction.status, profile?.connection?.sounderAddress, profile?.connection?.gnssAddress,
+            profile?.connection?.gnssTransport, profile?.connection?.gnssHost, profile?.connection?.gnssPort,
+            profile?.connection?.baud)
         check(values.size == columns.size)
         return values.joinToString(",") { cell(it) } + "\n"
     }

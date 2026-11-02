@@ -35,7 +35,15 @@ jobs:
         with:
           gradle-version: "8.10.2"
       - name: Test, lint, and compile debug APK
-        run: gradle --no-daemon --continue :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+        run: gradle --no-daemon --continue :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleFieldTest
+      - name: Verify isolated phone 2 test APK
+        run: '"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/fieldTest/app-fieldTest.apk'
+      - name: Retain isolated signed test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TriDrone-phone2-field-test-${{ github.sha }}
+          path: app/build/outputs/apk/fieldTest/app-fieldTest.apk
+          if-no-files-found: error
       - name: Upload validation reports
         if: always()
         uses: actions/upload-artifact@v4

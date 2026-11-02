@@ -103,56 +103,108 @@ class FieldUiSmokeTest {
     }
 
     @Test fun equipmentSavedFromDialogSurvivesActivityRecreation() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val file = HydroLive.equipmentFile(context)
-        val original = if (file.exists()) file.readBytes() else null
-        try {
-            EquipmentSettings().save(file)
+        withPreservedProfiles { store ->
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 try {
-                    step("open equipment") { openEquipmentSettings() }
-                    step("enter offset") {
-                        onView(withHint("Vertical offset in US survey feet (unset by default)"))
-                            .inRoot(isDialog()).perform(scrollTo(), replaceText("3.25"), closeSoftKeyboard())
-                    }
-                    step("open reference dropdown") {
-                        onView(isAssignableFrom(Spinner::class.java)).inRoot(isDialog()).perform(scrollTo(), click())
-                    }
-                    step("select antenna reference") {
-                        onData(equalTo("Physical antenna reference point (ARP)"))
-                            .inRoot(isPlatformPopup()).perform(click())
-                    }
-                    step("confirm and save") {
-                        onView(withText("I verified offset and receiver height reference; no duplicate antenna correction"))
-                            .inRoot(isDialog()).perform(scrollTo(), click())
-                        onView(withText("Save")).inRoot(isDialog()).perform(click())
-                    }
-                    assertEquals(3.25, EquipmentSettings.load(file).offsetUsft!!, 0.0)
-                    assertTrue(EquipmentSettings.load(file).confirmed)
-                    step("recreate activity") { scenario.recreate() }
-                    step("reopen equipment") { openEquipmentSettings() }
-                    step("verify restored configuration") {
-                        onView(withHint("Vertical offset in US survey feet (unset by default)"))
-                            .inRoot(isDialog()).perform(scrollTo()).check(matches(withText("3.25")))
-                        onView(withText("I verified offset and receiver height reference; no duplicate antenna correction"))
-                            .inRoot(isDialog()).perform(scrollTo()).check(matches(isChecked()))
-                    }
-                    screenshot("equipment-settings-restored")
-                    onView(withText("Cancel")).inRoot(isDialog()).perform(click())
+                    openEquipmentSettings()
+                    onView(withId(R.id.geometry_a)).inRoot(isDialog())
+                        .perform(scrollTo(), replaceText("3.25"), closeSoftKeyboard())
+                    onView(withId(R.id.geometry_b)).inRoot(isDialog())
+                        .perform(scrollTo(), replaceText("0.75"), closeSoftKeyboard())
+                    onView(withId(R.id.geometry_reference)).inRoot(isDialog()).perform(scrollTo(), click())
+                    onData(equalTo("Physical antenna reference point (ARP)"))
+                        .inRoot(isPlatformPopup()).perform(click())
+                    onView(withId(R.id.geometry_confirmed)).inRoot(isDialog()).perform(scrollTo(), click())
+                    onView(withId(R.id.profile_sounder_address)).inRoot(isDialog())
+                        .perform(scrollTo(), replaceText("AA:BB:CC:DD:EE:01"), closeSoftKeyboard())
+                    onView(withId(R.id.profile_save)).inRoot(isDialog()).perform(scrollTo(), click())
+                    assertEquals(3.25, store.active()!!.geometry.gpsToSounderUsft!!, 0.0)
+                    assertEquals(0.75, store.active()!!.geometry.sounderBelowWaterlineUsft!!, 0.0)
+                    assertEquals("AA:BB:CC:DD:EE:01", store.active()!!.connection.sounderAddress)
+                    assertTrue(store.active()!!.geometry.usable)
+                    onView(withText("Close")).inRoot(isDialog()).perform(click())
+                    scenario.recreate()
+                    openEquipmentSettings()
+                    onView(withId(R.id.geometry_a)).inRoot(isDialog()).perform(scrollTo()).check(matches(withText("3.25")))
+                    onView(withId(R.id.geometry_b)).inRoot(isDialog()).perform(scrollTo()).check(matches(withText("0.75")))
+                    onView(withId(R.id.geometry_confirmed)).inRoot(isDialog()).perform(scrollTo()).check(matches(isChecked()))
+                    onView(withId(R.id.geometry_preview_button)).inRoot(isDialog()).perform(scrollTo(), click())
+                    onView(withId(R.id.geometry_preview)).inRoot(isDialog()).perform(scrollTo())
+                        .check(matches(withText(containsString("2.500 ftUS"))))
+                    onView(withId(R.id.profile_picker)).inRoot(isDialog()).perform(scrollTo())
+                    screenshot("vertical-setup-measured")
+                    onView(withText("Close")).inRoot(isDialog()).perform(click())
                 } catch (failure: Throwable) {
-                    // Capture while the failing dialog is still present, before ActivityScenario closes.
                     runCatching { screenshot("equipment-failure") }
                     throw failure
                 }
             }
+        }
+    }
+
+    @Test fun profilePickerDoesNotActivateUntilSaveAndCeeKeepsOwnSettings() {
+        withPreservedProfiles { store ->
+            val original = store.active()!!
+            ActivityScenario.launch(MainActivity::class.java).use {
+                openEquipmentSettings()
+                onView(withId(R.id.profile_picker)).inRoot(isDialog()).perform(scrollTo(), click())
+                onData(equalTo("Pole / CEE-LINE")).inRoot(isPlatformPopup()).perform(click())
+                assertEquals("Viewing a profile must not change active acquisition", original.id, store.active()!!.id)
+                onView(withText(containsString("Set the SD1000 serial side externally to 9,600 baud")))
+                    .inRoot(isDialog()).check(matches(isDisplayed()))
+                screenshot("vertical-setup-cee-line")
+                onView(withId(R.id.geometry_a)).inRoot(isDialog()).perform(scrollTo(), replaceText("5.0"), closeSoftKeyboard())
+                onView(withId(R.id.geometry_b)).inRoot(isDialog()).perform(scrollTo(), replaceText("0.5"), closeSoftKeyboard())
+                onView(withId(R.id.profile_save)).inRoot(isDialog()).perform(scrollTo(), click())
+                assertEquals("pole_cee_line", store.active()!!.id)
+                assertEquals(9600, store.active()!!.connection.baud)
+                assertEquals(5.0, store.active()!!.geometry.gpsToSounderUsft!!, 0.0)
+                assertFalse("Unconfirmed preparation cannot certify a calibration", store.active()!!.geometry.usable)
+                assertEquals(original, store.all().single { p -> p.id == original.id })
+                onView(withText("Close")).inRoot(isDialog()).perform(click())
+            }
+        }
+    }
+
+    @Test fun portableProfileImportAddsCopiesWithoutActivatingOrConfirming() {
+        withPreservedProfiles { store ->
+            val original = store.active()!!
+            val transfer = store.exportProfiles()
+            ActivityScenario.launch(MainActivity::class.java).use {
+                openEquipmentSettings()
+                onView(withText("Transfer profiles")).inRoot(isDialog()).perform(click())
+                onView(withText("Import pasted profile text")).inRoot(isDialog()).perform(click())
+                onView(withHint("Paste exported profile text")).inRoot(isDialog())
+                    .perform(replaceText(transfer), closeSoftKeyboard())
+                onView(withText("Import copies")).inRoot(isDialog()).perform(click())
+                assertEquals(original, store.active())
+                assertEquals(4, store.all().size)
+                val copies = store.all().filter { p -> p.id.contains("_import") }
+                assertEquals(2, copies.size)
+                assertTrue(copies.all { p -> !p.geometry.verified && !p.calibration.confirmed })
+                screenshot("portable-profiles-imported")
+                onView(withText("Close")).inRoot(isDialog()).perform(click())
+            }
+        }
+    }
+
+    private fun withPreservedProfiles(action: (EquipmentProfiles) -> Unit) {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val file = File(context.filesDir, "equipment_profiles.properties")
+        val original = if (file.exists()) file.readBytes() else null
+        try {
+            // This is an isolated instrumentation installation, never a physical survey phone.
+            file.delete()
+            val store = EquipmentProfiles(context.filesDir) { false }
+            store.seedDefaults()
+            action(store)
         } finally {
             if (original == null) file.delete() else file.writeBytes(original)
         }
     }
-
     private fun openEquipmentSettings() {
-        onView(withId(R.id.tab_settings)).perform(click())
-        onView(withText("Antenna / transducer vertical offset")).perform(scrollTo(), click())
+        onView(withId(R.id.tab_equipment)).perform(click())
+        onView(withId(R.id.vertical_setup)).perform(scrollTo(), click())
     }
 
     private fun step(name: String, action: () -> Unit) {

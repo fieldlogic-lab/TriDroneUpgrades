@@ -48,8 +48,11 @@ class SounderDiagnosticService : Service() {
             return START_NOT_STICKY
         }
         if (!running.compareAndSet(false, true)) return START_NOT_STICKY
-        HydroLive.claimSounder(hydroSource)
+        val profiles = EquipmentProfiles(filesDir) { HydroLive.recording }
+        profiles.seedDefaults()
         val address = intent?.getStringExtra("address").orEmpty()
+        val profile = profiles.active()?.let { it.copy(connection = it.connection.copy(sounderAddress = address)) }
+        HydroLive.claimSounder(hydroSource, profile)
         Thread {
             var logFile: File? = null
             try {
@@ -60,7 +63,7 @@ class SounderDiagnosticService : Service() {
                 val adapter = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter
                     ?: throw IllegalStateException("Bluetooth unavailable")
                 val device = adapter.getRemoteDevice(address)
-                status("connecting", "Bluetooth RFCOMM SPP; protocol unverified")
+                status("connecting", "${profile?.name ?: "Sounder"}; Bluetooth RFCOMM SPP; protocol unverified")
                 val connection = device.createRfcommSocketToServiceRecord(spp)
                 socket = connection
                 connection.connect()
@@ -68,7 +71,9 @@ class SounderDiagnosticService : Service() {
                 logFile = File(directory, "sounder_raw_${System.currentTimeMillis()}.bin")
                 synchronized(HydroLive) { if (HydroLive.ownsSounder(hydroSource)) prefs.edit().putString("file", logFile.absolutePath)
                     .putLong("bytes", 0L).putInt("frames", 0).remove("preview").apply() }
-                status("connected", "Provisional field-2 meters decoder; hardware verification required")
+                status("connected", if (profile?.model == "CEE_LINE")
+                    "CEE-LINE raw capture only; Parani serial side 9600 baud; depth protocol unverified"
+                    else "Provisional field-2 meters decoder; hardware verification required")
                 val framer = DepthStreamDecoder()
                 var bytesTotal = 0L
                 var framesTotal = 0

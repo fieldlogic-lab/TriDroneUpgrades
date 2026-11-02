@@ -9,4 +9,16 @@
     <item name="tab_sessions" type="id" />
     <item name="tab_equipment" type="id" />
     <item name="tab_settings" type="id" />
+    <item name="vertical_setup" type="id" />
+    <item name="profile_picker" type="id" />
+    <item name="geometry_a" type="id" />
+    <item name="geometry_b" type="id" />
+    <item name="geometry_reference" type="id" />
+    <item name="geometry_confirmed" type="id" />
+    <item name="geometry_preview" type="id" />
+    <item name="geometry_preview_button" type="id" />
+    <item name="depth_reference" type="id" />
+    <item name="calibration_confirmed" type="id" />
+    <item name="profile_sounder_address" type="id" />
+    <item name="profile_save" type="id" />
 </resources>

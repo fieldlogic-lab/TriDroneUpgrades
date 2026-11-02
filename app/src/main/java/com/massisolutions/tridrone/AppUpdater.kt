@@ -24,6 +24,12 @@ object AppUpdater {
     private const val DEFAULT_FEED = "https://github.com/fieldlogic-lab/TriDroneUpgrades/releases/download/dev-latest/latest.json"
 
     fun open(activity: Activity) {
+        if (activity.packageName.endsWith(".fieldtest")) {
+            AlertDialog.Builder(activity).setTitle("Isolated phone #2 test build")
+                .setMessage("Install reviewed test APKs separately. Production update feeds are disabled in this test app; the original TriDrone installation and recordings remain separate.")
+                .setPositiveButton("OK", null).show()
+            return
+        }
         val prefs = activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE)
         val current = prefs.getString(KEY, DEFAULT_FEED) ?: DEFAULT_FEED
         val input = EditText(activity).apply {

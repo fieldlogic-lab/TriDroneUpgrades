@@ -16,6 +16,7 @@ android {
         val sourceCommit = System.getenv("GITHUB_SHA")?.take(7) ?: "uncommitted"
         versionName = "0.3.0-test.$testRun.$sourceCommit"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        resValue("string", "app_name", "TriDrone Logger")
     }
 
     signingConfigs {
@@ -30,6 +31,15 @@ android {
         getByName("debug") {
             if (!System.getenv("TRIDRONE_KEYSTORE_PATH").isNullOrBlank())
                 signingConfig = signingConfigs.getByName("persistentDebug")
+        }
+        create("fieldTest") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".fieldtest"
+            versionNameSuffix = "-phone2"
+            resValue("string", "app_name", "TriDrone Field Test")
+            // Isolated test identity; never use the production update/signing path.
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("debug")
         }
     }
     compileOptions {

@@ -45,9 +45,12 @@ class RtkService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") { stopSelf(); return START_NOT_STICKY }
         if (running.getAndSet(true)) return START_NOT_STICKY
-        HydroLive.claimGnss(hydroSource)
         precisionTracker.reset()
         val address = intent?.getStringExtra("address") ?: ""
+        val profile = EquipmentProfiles(filesDir) { HydroLive.recording }.active()?.let {
+            it.copy(connection = it.connection.copy(gnssTransport = "BLUETOOTH", gnssAddress = address))
+        }
+        HydroLive.claimGnss(hydroSource, profile)
         worker = Thread {
             try {
                 if (Build.VERSION.SDK_INT >= 31 &&
@@ -83,7 +86,9 @@ class RtkService : Service() {
                 var fixes = 0
                 while (running.get()) {
                     val bytes = input.read(buffer)
-                    if (bytes < 0) break
+                    if (bytes < 0) {
+                        break
+                    }
                     for (i in 0 until bytes) {
                         val c = buffer[i].toInt().toChar()
                         if (c == '\n') {
@@ -204,10 +209,13 @@ class WifiRtkService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") { stopSelf(); return START_NOT_STICKY }
         if (running.getAndSet(true)) return START_NOT_STICKY
-        HydroLive.claimGnss(hydroSource)
         precisionTracker.reset()
         val host = intent?.getStringExtra("host").orEmpty()
         val port = intent?.getIntExtra("port", 0) ?: 0
+        val profile = EquipmentProfiles(filesDir) { HydroLive.recording }.active()?.let {
+            it.copy(connection = it.connection.copy(gnssTransport = "TCP", gnssHost = host, gnssPort = port))
+        }
+        HydroLive.claimGnss(hydroSource, profile)
         if (host.isBlank() || port !in 1..65535) {
             synchronized(HydroLive) { if (HydroLive.ownsGnss(hydroSource)) prefs.edit().putString("state", "error").putString("detail", "Configure receiver IP and TCP port").apply() }
             running.set(false); stopSelf(); return START_NOT_STICKY
