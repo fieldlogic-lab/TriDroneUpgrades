@@ -108,6 +108,20 @@ object HydroLive {
             put("started_utc_ms", startedUtc); put("protocol", HydroLiteDecoder.PROTOCOL)
             put("protocol_verified", false); put("depth_range_guard_m", HydroLiteDecoder.MAX_DEPTH_METERS)
             put("vertical_offset_usft", settings.offsetUsft ?: JSONObject.NULL)
+            // Profile is additional immutable provenance. Legacy offset remains unchanged
+            // until physical calibration and a verified migration are completed.
+            EquipmentProfiles(c.filesDir) { recording }.active()?.let { p ->
+                put("equipment_profile_id", p.id)
+                put("equipment_profile_name", p.name)
+                put("equipment_sounder_model", p.model)
+                put("equipment_transport", p.transport)
+                put("gps_to_sounder_center_usft", p.geometry.gpsToSounderUsft ?: JSONObject.NULL)
+                put("sounder_below_waterline_usft", p.geometry.sounderBelowWaterlineUsft ?: JSONObject.NULL)
+                put("geometry_antenna_reference", p.geometry.reference)
+                put("geometry_verified", p.geometry.usable)
+                put("geometry_checked_utc_ms", p.checkedUtcMs)
+                put("profile_geometry_applied_to_recording", false)
+            }
             put("antenna_reference", settings.antennaReference); put("offset_confirmed", settings.confirmed)
             put("offset_sign", "positive downward"); put("pair_tolerance_ms", settings.pairToleranceMillis)
             put("time_basis", "device receipt time; hardware latency not measured")
