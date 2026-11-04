@@ -61,6 +61,8 @@ object HydroLive {
             observation.fixQuality ?: 0, observation.altitudeMeters, sigma?.horizontalMeters, sigma?.verticalMeters,
             fields[0], sigma?.raw.orEmpty(), sigma?.receivedUtcMillis))
     }
+    private val recentMapPoints = java.util.ArrayDeque<Pair<Double, Double>>()
+    @Synchronized fun mapPoints(): List<Pair<Double, Double>> = recentMapPoints.toList()
     private var sounderOwner = ""
     @Synchronized fun ownsSounder(source: String) = source == sounderOwner
     @Synchronized fun claimSounder(source: String) {
@@ -77,7 +79,7 @@ object HydroLive {
     }
     @Synchronized fun frame(source: String, frame: String, utc: Long, nanos: Long) {
         if (source != sounderOwner) return
-        val sample = HydroLiteDecoder.decode(frame, utc, nanos)
+        val sample = if (source == "CEE_LINE_USB") CeeLineDbt.decode(frame, utc, nanos) else HydroLiteDecoder.decode(frame, utc, nanos)
         depth = sample
         android.util.Log.d("HydroLite", "${sample.validity}: ${sample.diagnostic}")
         val paired = gnss.paired(sample, settings.pairToleranceMillis)
@@ -85,9 +87,19 @@ object HydroLive {
         try {
             writer?.apply { write(HydroCsv.row(sample, paired, settings, sourceCrs)); flush() }
             eventCount++
-            if (sample.valid && paired != null) validCount++
+            if (sample.valid && paired != null) {
+                validCount++
+                if (recentMapPoints.size >= 2000) recentMapPoints.removeFirst()
+                recentMapPoints.addLast(Pair(paired.latitude, paired.longitude))
+            }
             persistStatus()
         } catch (e: Exception) { fail(e) }
+    }
+    @Synchronized fun waterDepthMeters(c: Context): Double? {
+        val sample = depth ?: return null
+        if (!sample.valid || sample.status(sounderConnected, SystemClock.elapsedRealtimeNanos()) != "VALID_PROVISIONAL" || sample.protocol != CeeLineDbt.PROTOCOL) return null
+        val geometry = if (recording) settings else EquipmentSettings.load(equipmentFile(c))
+        return WaterDepth.meters(sample.meters, geometry.waterlineOffsetUsft?.div(SurveyUnits.US_FEET_PER_METER))
     }
     @Synchronized fun start(c: Context): File {
         check(!recording) { "Already recording" }
@@ -97,16 +109,21 @@ object HydroLive {
         check(sounderConnected && current != null && current.valid && current.status(true, now) == "VALID_PROVISIONAL") {
             "A fresh valid provisional depth is required" }
         settings = EquipmentSettings.load(equipmentFile(c))
+        check(current.protocol != CeeLineDbt.PROTOCOL || settings.ceeValid) { "Confirm both vertical measurements before GO" }
         check(gnss.paired(current, settings.pairToleranceMillis) != null) { "A fresh paired external GNSS epoch is required" }
         val folder = File(c.filesDir, "hydro_surveys").apply { mkdirs() }
         startedUtc = System.currentTimeMillis(); startedNanos = now; stoppedNanos = 0
         file = File(folder, "hydro_$startedUtc.csv")
         rawFile = File(folder, "hydro_$startedUtc.gnss.csv")
         sourceCrs = SurveyConfig.load(c).source
-        val sounderRaw = c.getSharedPreferences("sounder_diagnostics", Context.MODE_PRIVATE).getString("file", "")
+        val sounderRaw = if (current.protocol == CeeLineDbt.PROTOCOL) "" else c.getSharedPreferences("sounder_diagnostics", Context.MODE_PRIVATE).getString("file", "")
         val metadata = SurveyConfig.load(c).json().apply {
-            put("started_utc_ms", startedUtc); put("protocol", HydroLiteDecoder.PROTOCOL)
-            put("protocol_verified", false); put("depth_range_guard_m", HydroLiteDecoder.MAX_DEPTH_METERS)
+            put("started_utc_ms", startedUtc); put("protocol", current.protocol)
+            put("schema_version", 2)
+            put("transducer_below_waterline_usft", settings.waterlineOffsetUsft ?: JSONObject.NULL)
+            put("water_depth_formula", "raw_DBT + positive_submerged_transducer_offset")
+            put("bottom_formula", "verified_GNSS_reference_elevation - GPS_to_transducer - raw_DBT")
+            put("protocol_verified", false); put("depth_range_guard_m", if (current.protocol == CeeLineDbt.PROTOCOL) JSONObject.NULL else HydroLiteDecoder.MAX_DEPTH_METERS)
             put("vertical_offset_usft", settings.offsetUsft ?: JSONObject.NULL)
             put("antenna_reference", settings.antennaReference); put("offset_confirmed", settings.confirmed)
             put("offset_sign", "positive downward"); put("pair_tolerance_ms", settings.pairToleranceMillis)
@@ -114,7 +131,7 @@ object HydroLive {
             put("sounder_raw_bytes_file", sounderRaw); put("gnss_raw_file", rawFile!!.name)
             put("recording_raw_sounder_bytes_file", "hydro_$startedUtc.sounder.bin")
             put("antenna_correction", "none applied; input height reference must match offset reference")
-            put("valid_count_definition", "numeric provisional depth paired with GNSS quality 1–5; not survey-grade certification")
+            put("valid_count_definition", "numeric provisional depth paired with GNSS quality 4 or 5; not survey-grade certification")
         }
         try {
             File(folder, "hydro_$startedUtc.metadata.json").writeText(metadata.toString(2))
@@ -123,6 +140,7 @@ object HydroLive {
             rawGnssWriter = rawFile!!.bufferedWriter().apply { write("received_utc_ms,elapsed_realtime_ns,raw_sentence\n"); flush() }
             // Preserve the epoch used to open the recording, even if no further GNSS arrives.
             gnss.latest?.let { rawGnssWriter!!.apply { write("${it.receivedUtcMillis},${it.elapsedNanos},${HydroCsv.cell(it.raw)}\n"); flush() } }
+            recentMapPoints.clear()
             validCount = 0; eventCount = 0; error = ""; recording = true; persistStatus()
             return file!!
         } catch (e: Exception) { stop(); throw e }

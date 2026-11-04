@@ -27,10 +27,10 @@ class NmeaGnssAdapterTest {
         assertNull(NmeaGnssAdapter.parseGga(invalid, 123L))
     }
 
-    @Test fun floatDoesNotPassLiveGate() {
+    @Test fun floatPassesLiveGateWithQualityPreserved() {
         val input = sentence("GPGGA,123519,4048.0000,N,07303.0000,W,5,12,0.7,10.2,M,-30.0,M,,")
         val fix = NmeaGnssAdapter.parseGga(input, 123L)!!
-        assertFalse(ObservationGate.validForLiveSurvey(fix, DepthObservation(123L, 2.0, DataOrigin.LIVE_HARDWARE)))
+        assertTrue(ObservationGate.validForLiveSurvey(fix, DepthObservation(123L, 2.0, DataOrigin.LIVE_HARDWARE)))
     }
     @Test fun explicitNoFixAndMalformedGgaInvalidatePreviousEpochImmediately() {
         // Synthetic malformed protocol inputs; these are not captured pool observations.

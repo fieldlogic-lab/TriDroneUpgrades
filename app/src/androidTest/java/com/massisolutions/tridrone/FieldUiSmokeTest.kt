@@ -112,8 +112,12 @@ class FieldUiSmokeTest {
                 try {
                     step("open equipment") { openEquipmentSettings() }
                     step("enter offset") {
-                        onView(withHint("Vertical offset in US survey feet (unset by default)"))
+                        onView(withHint("GNSS reference to transducer (+ US survey ft)"))
                             .inRoot(isDialog()).perform(scrollTo(), replaceText("3.25"), closeSoftKeyboard())
+                    }
+                    step("enter waterline measurement") {
+                        onView(withHint("Transducer below waterline (+ US survey ft)"))
+                            .inRoot(isDialog()).perform(scrollTo(), replaceText("0.70"), closeSoftKeyboard())
                     }
                     step("open reference dropdown") {
                         onView(isAssignableFrom(Spinner::class.java)).inRoot(isDialog()).perform(scrollTo(), click())
@@ -128,12 +132,15 @@ class FieldUiSmokeTest {
                         onView(withText("Save")).inRoot(isDialog()).perform(click())
                     }
                     assertEquals(3.25, EquipmentSettings.load(file).offsetUsft!!, 0.0)
+                    assertEquals(0.70, EquipmentSettings.load(file).waterlineOffsetUsft!!, 0.0)
                     assertTrue(EquipmentSettings.load(file).confirmed)
                     step("recreate activity") { scenario.recreate() }
                     step("reopen equipment") { openEquipmentSettings() }
                     step("verify restored configuration") {
-                        onView(withHint("Vertical offset in US survey feet (unset by default)"))
+                        onView(withHint("GNSS reference to transducer (+ US survey ft)"))
                             .inRoot(isDialog()).perform(scrollTo()).check(matches(withText("3.25")))
+                        onView(withHint("Transducer below waterline (+ US survey ft)"))
+                            .inRoot(isDialog()).perform(scrollTo()).check(matches(withText("0.7")))
                         onView(withText("I verified offset and receiver height reference; no duplicate antenna correction"))
                             .inRoot(isDialog()).perform(scrollTo()).check(matches(isChecked()))
                     }
