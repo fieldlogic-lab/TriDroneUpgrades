@@ -5,6 +5,11 @@ package com.massisolutions.tridrone
  * Does not connect to hardware or assert that a synchronized survey fix exists.
  */
 object NmeaGnssAdapter {
+    fun isGga(sentence: String): Boolean = NmeaGga.valid(sentence) &&
+        sentence.substringBefore('*').removePrefix("$").substringBefore(',').endsWith("GGA")
+    fun invalidatesFix(sentence: String): Boolean = isGga(sentence) &&
+        (parseGga(sentence, 0)?.fixQuality ?: 0) == 0
+
     fun parseGga(sentence: String, receivedUtcMillis: Long): GnssObservation? {
         if (!NmeaGga.valid(sentence)) return null
         val fields = NmeaGga.parse(sentence) ?: return null
@@ -26,3 +31,4 @@ object NmeaGnssAdapter {
         )
     }
 }
+

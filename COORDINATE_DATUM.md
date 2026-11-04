@@ -26,3 +26,12 @@ Projected and bottom fields are **null** pending validated transforms and vertic
 2. EPSG:6539 transformation validated against independent control points; reported accuracy sufficient for use case.
 3. NAVD88 elevations only populated after control/model/draft validation against independent check soundings and benchmarks.
 4. Changing datum or correction values produces an auditable new derived export; never overwrite raw observations.
+
+## CEE-LINE DBT extension (Issue 15)
+
+DBT is positive downward from the transducer. A positive submerged-transducer
+waterline offset ADDS to DBT for Water Depth. GNSS-to-transducer separation is
+independent and positive downward; bottom elevation from a verified GNSS height
+reference is reference elevation minus that separation minus DBT. Never use
+waterline offset twice. International NMEA feet and US survey feet are distinct.
+See `docs/ISSUE_15_CEE_LINE_FIELD_TEST.md` for timestamps, fields and field gates.

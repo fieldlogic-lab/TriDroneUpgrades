@@ -46,8 +46,8 @@ object ObservationGate {
     fun validForLiveSurvey(gnss: GnssObservation, depth: DepthObservation): Boolean =
         sameSource(gnss, depth) &&
             gnss.origin == DataOrigin.LIVE_HARDWARE &&
-            gnss.fixQuality == 4 &&
+            gnss.fixQuality in listOf(4, 5) &&
             gnss.latitude in -90.0..90.0 &&
             gnss.longitude in -180.0..180.0 &&
-            depth.depthMeters.isFinite() && depth.depthMeters >= 0.0
+            depth.depthMeters.isFinite() && depth.depthMeters > 0.0
 }

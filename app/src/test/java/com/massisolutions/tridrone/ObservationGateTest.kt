@@ -14,8 +14,11 @@ class ObservationGateTest {
         assertFalse(ObservationGate.validForLiveSurvey(gnss(DataOrigin.DEMO_SYNTHETIC), depth(DataOrigin.DEMO_SYNTHETIC)))
     }
 
-    @Test fun rejectNonFixedLivePosition() {
-        assertFalse(ObservationGate.validForLiveSurvey(gnss(DataOrigin.LIVE_HARDWARE, 5), depth(DataOrigin.LIVE_HARDWARE)))
+    @Test fun acceptFloatAndRejectAutonomousPosition() {
+        assertTrue(ObservationGate.validForLiveSurvey(gnss(DataOrigin.LIVE_HARDWARE, 5), depth(DataOrigin.LIVE_HARDWARE)))
+        assertFalse(ObservationGate.validForLiveSurvey(gnss(DataOrigin.LIVE_HARDWARE, 1), depth(DataOrigin.LIVE_HARDWARE)))
+        assertFalse(ObservationGate.validForLiveSurvey(gnss(DataOrigin.LIVE_HARDWARE), depth(DataOrigin.LIVE_HARDWARE).copy(depthMeters = 0.0)))
+        assertFalse(ObservationGate.validForLiveSurvey(gnss(DataOrigin.LIVE_HARDWARE), depth(DataOrigin.LIVE_HARDWARE).copy(depthMeters = Double.NaN)))
     }
 
     @Test fun acceptEligibleLiveSampleWithoutClaimingSurveyReadiness() {
