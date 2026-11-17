@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteFullException
 import android.database.sqlite.SQLiteOpenHelper
 import android.database.sqlite.SQLiteStatement
 import org.json.JSONObject
@@ -291,6 +292,9 @@ class ProjectStore internal constructor(
                     }
                 }
                 if (rejected > 0) warnings.add("${file.name}: $rejected records remain in the original file.")
+            } catch (_: SQLiteFullException) {
+                warnings.add("${file.name}: Device storage is full. Original files were retained. Free space and reopen TriDrone to retry.")
+                break
             } catch (exception: java.io.IOException) {
                 warnings.add("${file.name}: ${exception.message ?: "Cannot read original survey"}")
             } catch (exception: IllegalStateException) {
@@ -429,7 +433,9 @@ class ProjectStore internal constructor(
             arrayOf(now, projectId))
     }
 
-    private class Database(context: Context, name: String) : SQLiteOpenHelper(context, name, null, 1) {
+    private class Database(context: Context, name: String) : SQLiteOpenHelper(context, name, null, 1, {
+        // Let SQLite report corruption without the default handler deleting the survey files.
+    }) {
         init { setWriteAheadLoggingEnabled(true) }
 
         override fun onConfigure(db: SQLiteDatabase) {
@@ -457,6 +463,7 @@ class ProjectStore internal constructor(
                 csv_row TEXT NOT NULL,
                 FOREIGN KEY(session_id, project_id) REFERENCES sessions(id, project_id))""")
             db.execSQL("CREATE INDEX observations_session_order ON observations(session_id, sequence)")
+            db.execSQL("CREATE INDEX observations_session_valid ON observations(session_id) WHERE valid = 1")
             db.execSQL("CREATE INDEX observations_session_time ON observations(session_id, utc_ms, id)")
             db.execSQL("CREATE INDEX observations_project_time ON observations(project_id, utc_ms, id)")
             db.execSQL("""CREATE TABLE app_state(
