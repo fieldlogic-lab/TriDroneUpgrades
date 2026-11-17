@@ -24,14 +24,14 @@ internal class ProjectScreens(
     private var pendingId = savedState?.getString("survey_export_id")
     private var pendingKind = savedState?.getString("survey_export_kind")
 
-    fun restore() = run({ store.activeProject() }) { onProjectChanged(it) }
+    fun restore(): Unit = run({ store.activeProject() }) { onProjectChanged(it) }
 
     fun save(state: Bundle) {
         state.putString("survey_export_id", pendingId)
         state.putString("survey_export_kind", pendingKind)
     }
 
-    fun show() = run({ store.projects() to store.migrationWarnings }) { (projects, warnings) ->
+    fun show(): Unit = run({ store.projects() to store.migrationWarnings }) { (projects, warnings) ->
         val labels = projects.map { it.name + if (it.archived) " (archived)" else "" }
         AlertDialog.Builder(activity).setTitle("Projects")
             .setItems(labels.toTypedArray()) { _, index -> showProject(projects[index].id) }
@@ -44,7 +44,7 @@ internal class ProjectScreens(
             }.show()
     }
 
-    private fun showProject(id: String) = run({
+    private fun showProject(id: String): Unit = run({
         val project = store.projects().first { it.id == id }
         Triple(project, store.activeProject()?.id, store.sessions(id).size)
     }) { (project, activeId, count) ->
@@ -132,7 +132,7 @@ internal class ProjectScreens(
         }
     }
 
-    private fun showHistory(project: SurveyProject) = run({ store.sessions(project.id) }) { collections ->
+    private fun showHistory(project: SurveyProject): Unit = run({ store.sessions(project.id) }) { collections ->
         val dialog = AlertDialog.Builder(activity).setTitle("${project.name} collection history")
         if (collections.isEmpty()) dialog.setMessage("No collections recorded.")
         else dialog.setItems(collections.map { "${it.name}\n${summary(it)}" }.toTypedArray()) { _, index ->
@@ -141,7 +141,7 @@ internal class ProjectScreens(
         dialog.setNegativeButton("Back") { _, _ -> showProject(project.id) }.show()
     }
 
-    private fun showCollection(project: SurveyProject, id: String) = run({ checkNotNull(store.session(id)) }) { session ->
+    private fun showCollection(project: SurveyProject, id: String): Unit = run({ checkNotNull(store.session(id)) }) { session ->
         val options = linkedMapOf<String, () -> Unit>()
         options["Collection statistics and settings"] = {
             showText(session.name, summary(session) + "\n\n" +
