@@ -10,14 +10,13 @@ import org.json.JSONObject
 object HydroLive {
     private val gnss = HydroGnssState()
     private val precision = NmeaPrecisionTracker()
-    private var writer: BufferedWriter? = null
+    private var store: ProjectStore? = null
+    private var sessionId: String? = null
     private var rawGnssWriter: BufferedWriter? = null
     private var rawDepthOutput: java.io.OutputStream? = null
     private var settings = EquipmentSettings()
     private var sourceCrs = "UNKNOWN"
     private var context: Context? = null
-    private var file: File? = null
-    private var rawFile: File? = null
     @Volatile var depth: HydroDepth? = null; private set
     @Volatile var sounderConnected = false; private set
     @Volatile var recording = false; private set
@@ -83,14 +82,19 @@ object HydroLive {
         val paired = gnss.paired(sample, settings.pairToleranceMillis)
         if (!recording) return
         try {
-            writer?.apply { write(HydroCsv.row(sample, paired, settings, sourceCrs)); flush() }
+            checkNotNull(store).append(checkNotNull(sessionId), sample, paired,
+                HydroCsv.row(sample, paired, settings, sourceCrs))
             eventCount++
             if (sample.valid && paired != null) validCount++
             persistStatus()
         } catch (e: Exception) { fail(e) }
     }
-    @Synchronized fun start(c: Context): File {
+    @Synchronized fun start(c: Context, projectId: String) {
         check(!recording) { "Already recording" }
+        if (sessionId != null) {
+            closeRecording()
+            check(sessionId == null) { "Previous collection could not be finalized. $error" }
+        }
         context = c.applicationContext
         val now = SystemClock.elapsedRealtimeNanos()
         val current = depth
@@ -100,8 +104,9 @@ object HydroLive {
         check(gnss.paired(current, settings.pairToleranceMillis) != null) { "A fresh paired external GNSS epoch is required" }
         val folder = File(c.filesDir, "hydro_surveys").apply { mkdirs() }
         startedUtc = System.currentTimeMillis(); startedNanos = now; stoppedNanos = 0
-        file = File(folder, "hydro_$startedUtc.csv")
-        rawFile = File(folder, "hydro_$startedUtc.gnss.csv")
+        val stem = "hydro_${startedUtc}_${java.util.UUID.randomUUID()}"
+        val rawFile = File(folder, "$stem.gnss.csv")
+        val projectStore = ProjectStore.get(c)
         sourceCrs = SurveyConfig.load(c).source
         val sounderRaw = c.getSharedPreferences("sounder_diagnostics", Context.MODE_PRIVATE).getString("file", "")
         val metadata = SurveyConfig.load(c).json().apply {
@@ -111,33 +116,59 @@ object HydroLive {
             put("antenna_reference", settings.antennaReference); put("offset_confirmed", settings.confirmed)
             put("offset_sign", "positive downward"); put("pair_tolerance_ms", settings.pairToleranceMillis)
             put("time_basis", "device receipt time; hardware latency not measured")
-            put("sounder_raw_bytes_file", sounderRaw); put("gnss_raw_file", rawFile!!.name)
-            put("recording_raw_sounder_bytes_file", "hydro_$startedUtc.sounder.bin")
+            put("sounder_raw_bytes_file", sounderRaw); put("gnss_raw_file", rawFile.name)
+            put("recording_raw_sounder_bytes_file", "$stem.sounder.bin")
             put("antenna_correction", "none applied; input height reference must match offset reference")
             put("valid_count_definition", "numeric provisional depth paired with GNSS quality 1–5; not survey-grade certification")
         }
         try {
-            File(folder, "hydro_$startedUtc.metadata.json").writeText(metadata.toString(2))
-            rawDepthOutput = File(folder, "hydro_$startedUtc.sounder.bin").outputStream().buffered()
-            writer = file!!.bufferedWriter().apply { write(HydroCsv.header); flush() }
-            rawGnssWriter = rawFile!!.bufferedWriter().apply { write("received_utc_ms,elapsed_realtime_ns,raw_sentence\n"); flush() }
+            val session = projectStore.startSession(projectId, startedUtc, metadata, stem)
+            store = projectStore
+            sessionId = session.id
+            validCount = 0
+            eventCount = 0
+            error = ""
+            rawDepthOutput = File(folder, "$stem.sounder.bin").outputStream().buffered()
+            rawGnssWriter = rawFile.bufferedWriter()
+            checkNotNull(rawGnssWriter).apply { write("received_utc_ms,elapsed_realtime_ns,raw_sentence\n"); flush() }
             // Preserve the epoch used to open the recording, even if no further GNSS arrives.
             gnss.latest?.let { rawGnssWriter!!.apply { write("${it.receivedUtcMillis},${it.elapsedNanos},${HydroCsv.cell(it.raw)}\n"); flush() } }
-            validCount = 0; eventCount = 0; error = ""; recording = true; persistStatus()
-            return file!!
-        } catch (e: Exception) { stop(); throw e }
+            recording = true
+            persistStatus()
+        } catch (e: Exception) { fail(e); throw e }
     }
     @Synchronized fun stop() {
         recording = false; stoppedNanos = SystemClock.elapsedRealtimeNanos()
-        try { writer?.close() } catch (e: Exception) { error = e.message.orEmpty() }
-        try { rawGnssWriter?.close() } catch (e: Exception) { error = e.message.orEmpty() }
-        try { rawDepthOutput?.close() } catch (e: Exception) { error = e.message.orEmpty() }
-        writer = null; rawGnssWriter = null; rawDepthOutput = null; persistStatus()
+        closeRecording()
     }
-    private fun fail(e: Exception) { error = e.message ?: "Recording write failed"; stop() }
+
+    private fun closeRecording() {
+        try { rawGnssWriter?.close() } catch (e: Exception) { setWriteError(e) }
+        try { rawDepthOutput?.close() } catch (e: Exception) { setWriteError(e) }
+        rawGnssWriter = null
+        rawDepthOutput = null
+        try {
+            sessionId?.let { checkNotNull(store).finishSession(it, System.currentTimeMillis(), error.isNotBlank()) }
+            sessionId = null
+            store = null
+        } catch (e: Exception) {
+            setWriteError(e)
+        }
+        persistStatus()
+    }
+
+    private fun setWriteError(e: Exception) {
+        if (error.isBlank()) error = e.message ?: "Recording write failed"
+    }
+
+    private fun fail(e: Exception) {
+        setWriteError(e)
+        stop()
+    }
+
     private fun persistStatus() {
         context?.getSharedPreferences("hydro_status", Context.MODE_PRIVATE)?.edit()
             ?.putBoolean("recording", recording)?.putInt("events", eventCount)?.putInt("valid", validCount)
-            ?.putString("file", file?.absolutePath)?.putLong("started_utc_ms", startedUtc)?.putString("error", error)?.apply()
+            ?.putString("session_id", sessionId)?.putLong("started_utc_ms", startedUtc)?.putString("error", error)?.apply()
     }
 }

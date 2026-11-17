@@ -15,7 +15,7 @@ if [ "$test_result" -eq 0 ]; then
 import base64
 from pathlib import Path
 folder = Path('app/build/emulator-screenshots')
-for name in ('equipment-disconnected', 'survey-disconnected', 'survey-demo-explicit', 'equipment-settings-restored'):
+for name in ('equipment-disconnected', 'survey-disconnected', 'survey-demo-explicit', 'equipment-settings-restored', 'projects', 'collection-history'):
     if not (folder / f'{name}.png').is_file():
         raise SystemExit(f'Missing emulator screenshot: {name}')
 preview = base64.b64encode((folder / 'survey-disconnected-preview.png').read_bytes()).decode('ascii')

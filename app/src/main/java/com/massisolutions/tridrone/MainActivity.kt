@@ -17,6 +17,9 @@ import android.location.LocationListener
 import android.location.LocationManager
 
 class MainActivity : Activity(), LocationListener {
+    private lateinit var projectScreens: ProjectScreens
+    private lateinit var projectButton: Button
+    private var activeProject: SurveyProject? = null
     private val modeController = SurveyModeController()
     private val demoMode get() = modeController.state.mode == SurveyModeController.Mode.DEMO
     private val demoGnss get() = modeController.state.demoGnssConnected
@@ -190,6 +193,10 @@ class MainActivity : Activity(), LocationListener {
     private fun dp(value: Int) = (value * resources.displayMetrics.density + 0.5f).toInt()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        projectScreens = ProjectScreens(this, savedInstanceState) { project ->
+            activeProject = project
+            projectButton.text = project?.let { "Project • ${it.name}" } ?: "Select or create a project"
+        }
         val root = ScrollView(this)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -276,7 +283,7 @@ class MainActivity : Activity(), LocationListener {
             }
         })
         layout.addView(Button(this).apply {
-            text = "EXPORT LATEST CSV"
+            text = "EXPORT PHONE GPS DIAGNOSTIC CSV"
             setOnClickListener { exportLatest() }
         })
         layout.addView(Button(this).apply { text = "OPEN SURVEY MAP"; setOnClickListener { showSurveyMap() } })
@@ -352,11 +359,20 @@ class MainActivity : Activity(), LocationListener {
         demoSounderActions.addView(demoSounderButton)
         sounderCard.addView(demoSounderActions)
         val captureCard = section("03   SURVEY COLLECTION", "Continuous GNSS + depth logging")
+        projectButton = action("Select or create a project") { projectScreens.show() }
         setupNext = action("START LIVE RECORDING") {
             if (demoMode) { if (demoRecording) stopDemoRecording() else startDemoRecording(); updateDemoUi() }
             else {
                 try {
-                    if (HydroLive.recording) HydroLive.stop() else HydroLive.start(this)
+                    if (HydroLive.recording) HydroLive.stop()
+                    else {
+                        val project = activeProject
+                        if (project == null) {
+                            projectScreens.show()
+                            return@action
+                        }
+                        HydroLive.start(this, project.id)
+                    }
                     updateDisplay()
                 } catch (e: Exception) { Toast.makeText(this, e.message, Toast.LENGTH_LONG).show() }
             }
@@ -368,9 +384,10 @@ class MainActivity : Activity(), LocationListener {
         captureCard.addView(setupNext)
         captureCard.addView(heading("Live records provisional soundings and quality flags. NAVD88 elevations require verified vertical control. Demo observations remain separate.", 13f, muted))
         val reviewCard = section("SESSIONS & REVIEW", "Inspect observations after recovery")
-        reviewCard.addView(action("Live hydrographic recordings") { showHydroSessions() })
+        reviewCard.addView(action("Projects and collection history") { projectScreens.show() })
+        reviewCard.addView(action("Original hydrographic CSV files") { showOriginalHydroFiles() })
         reviewCard.addView(action("Saved surveys and points") { if (demoMode) showDemoReview() else showSavedSurveys() })
-        reviewCard.addView(action("Export latest CSV") {
+        reviewCard.addView(action("Export diagnostic or demo CSV") {
             if (demoMode) {
                 val file = sessionsRepository.latest(SessionRepository.Kind.DEMO)
                 if (file != null) exportFile(file) else Toast.makeText(this@MainActivity, "No demo sessions yet", Toast.LENGTH_SHORT).show()
@@ -477,6 +494,7 @@ class MainActivity : Activity(), LocationListener {
         liveRecording = heading("Stopped • 00:00:00\n0 valid soundings", 17f)
         surveyPage.addView(liveRecording)
         (setupNext.parent as? android.view.ViewGroup)?.removeView(setupNext)
+        surveyPage.addView(projectButton)
         surveyPage.addView(setupNext)
         (modeLabel.parent as? android.view.ViewGroup)?.removeView(modeLabel)
         surveyPage.addView(modeLabel)
@@ -522,6 +540,7 @@ class MainActivity : Activity(), LocationListener {
         }
         selectPage(0)
         setContentView(navHost)
+        projectScreens.restore()
         androidx.core.view.ViewCompat.requestApplyInsets(navHost)
     }
     override fun onResume() {
@@ -654,40 +673,20 @@ class MainActivity : Activity(), LocationListener {
         dialog.show()
     }
 
-    private fun showHydroSessions() {
-        val folder = File(filesDir, "hydro_surveys")
-        val files = folder.listFiles { f -> f.name.startsWith("hydro_") && f.extension == "csv" && !f.name.endsWith(".gnss.csv") }
-            ?.sortedByDescending { it.name }.orEmpty()
-        if (files.isEmpty()) { Toast.makeText(this, "No live hydrographic sessions", Toast.LENGTH_LONG).show(); return }
-        android.app.AlertDialog.Builder(this).setTitle("Live hydrographic recordings")
-            .setItems(files.map { it.name }.toTypedArray()) { _, index ->
-                val file = files[index]
-                val view = ScrollView(this).apply { addView(TextView(this@MainActivity).apply {
-                    setPadding(20, 20, 20, 20); setTextIsSelectable(true)
-                    text = "PROVISIONAL HYDROLITE DECODER • NAVD88 WITHHELD\nRaw/processed events (first 100):\n" + file.useLines { it.take(101).joinToString("\n") }
-                }) }
-                android.app.AlertDialog.Builder(this).setTitle(file.name).setView(view)
-                    .setPositiveButton("Close", null).setNeutralButton("Export CSV") { _, _ -> exportFile(file) }
-                    .setNegativeButton("Export audit ZIP") { _, _ -> exportHydroAudit(file) }.show()
-            }.setPositiveButton("Close", null).show()
-    }
-
-    private fun exportHydroAudit(file: File) {
-        try {
-            val metadata = File(file.parentFile, file.nameWithoutExtension + ".metadata.json")
-            val gnss = File(file.parentFile, file.nameWithoutExtension + ".gnss.csv")
-            val inputs = mutableListOf(file, metadata, gnss, File(file.parentFile, file.nameWithoutExtension + ".sounder.bin"))
-            if (metadata.exists()) {
-                val path = org.json.JSONObject(metadata.readText()).optString("sounder_raw_bytes_file")
-                val raw = File(path)
-                if (raw.isFile && raw.parentFile?.canonicalFile == File(filesDir, "sounder_diagnostics").canonicalFile) inputs.add(raw)
-            }
-            val zip = File(cacheDir, file.nameWithoutExtension + ".zip")
-            java.util.zip.ZipOutputStream(zip.outputStream()).use { out -> inputs.filter { it.isFile }.forEach { input ->
-                out.putNextEntry(java.util.zip.ZipEntry(input.name)); input.inputStream().use { it.copyTo(out) }; out.closeEntry()
-            } }
-            exportFile(zip)
-        } catch (e: Exception) { Toast.makeText(this, "Audit export failed: ${e.message}", Toast.LENGTH_LONG).show() }
+    private fun showOriginalHydroFiles() {
+        val files = File(filesDir, "hydro_surveys").listFiles { file ->
+            file.isFile && file.name.startsWith("hydro_") && file.extension == "csv" &&
+                !file.name.endsWith(".gnss.csv")
+        }?.sortedByDescending { it.name }.orEmpty()
+        val dialog = android.app.AlertDialog.Builder(this).setTitle("Original hydrographic CSV files")
+        if (files.isEmpty()) dialog.setMessage("No original CSV files from earlier builds.")
+        else dialog.setItems(files.map { it.name }.toTypedArray()) { _, index ->
+            val file = files[index]
+            android.app.AlertDialog.Builder(this).setTitle(file.name)
+                .setPositiveButton("Share original CSV") { _, _ -> exportFile(file) }
+                .setNegativeButton("Close", null).show()
+        }
+        dialog.setNegativeButton("Close", null).show()
     }
 
     private fun showSurveySettings() {
@@ -695,9 +694,6 @@ class MainActivity : Activity(), LocationListener {
         val container = ScrollView(this)
         val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 20, 28, 20) }
         fun heading(t: String) { form.addView(TextView(this).apply { text = t; textSize = 16f; setPadding(0, 14, 0, 8) }) }
-        heading("Project name (optional)")
-        val project = EditText(this).apply { setSingleLine(); setText(current.project); hint = "Survey project" }
-        form.addView(project)
         heading("Horizontal output coordinate system")
         val horizontal = Spinner(this)
         val options = listOf("EPSG:6539 — NAD83(2011) NY Long Island ftUS", "EPSG:4326 — WGS 84 geographic")
@@ -731,7 +727,7 @@ class MainActivity : Activity(), LocationListener {
                 val horizontalCode = if (horizontal.selectedItemPosition == 0) "EPSG:6539" else "EPSG:4326"
                 val favorites = current.favorites.toMutableSet()
                 if (favorite.isChecked) favorites.add(horizontalCode) else favorites.remove(horizontalCode)
-                SurveyConfig.save(this, SurveySettings(project.text.toString().trim(), horizontalCode,
+                SurveyConfig.save(this, SurveySettings(current.project, horizontalCode,
                     "EPSG:6360", "usft",
                     if (source.selectedItemPosition == 0) "UNKNOWN" else "EPSG:6318", favorites))
                 crsSpinner.setSelection(horizontal.selectedItemPosition)
@@ -1219,11 +1215,9 @@ class MainActivity : Activity(), LocationListener {
         }
     }
     private fun exportLatest() {
-        val hydro = File(filesDir, "hydro_surveys").listFiles { f -> f.extension == "csv" && !f.name.endsWith(".gnss.csv") }
-            ?.maxByOrNull { it.lastModified() }
-        val file = listOfNotNull(hydro, latest()).maxByOrNull { it.lastModified() }
+        val file = latest()
         if (file == null) {
-            Toast.makeText(this, "No survey CSV to export", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "No phone GPS diagnostic CSV to export", Toast.LENGTH_LONG).show()
             return
         }
         exportFile(file)
@@ -1243,6 +1237,17 @@ class MainActivity : Activity(), LocationListener {
             Toast.makeText(this, "Export failed: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
+    override fun onSaveInstanceState(outState: Bundle) {
+        projectScreens.save(outState)
+        super.onSaveInstanceState(outState)
+    }
+
+    @Deprecated("Receives the Storage Access Framework destination from the platform activity")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == ProjectScreens.EXPORT_REQUEST) projectScreens.onExportResult(resultCode, data)
+    }
+
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, results: IntArray) {
         super.onRequestPermissionsResult(code, permissions, results)
         if (code == 51 && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) startPreview()

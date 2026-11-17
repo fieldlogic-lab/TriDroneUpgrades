@@ -2,11 +2,11 @@ name: Build TriDrone Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [feature/issue-7-live-hydrography]
+    branches: [feature/issue-7-live-hydrography, feature/v0.4-project-collections]
 
 jobs:
   build:
-    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref == 'refs/heads/feature/issue-7-live-hydrography')
+    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && (github.ref == 'refs/heads/feature/issue-7-live-hydrography' || github.ref == 'refs/heads/feature/v0.4-project-collections'))
     runs-on: ubuntu-latest
     permissions:
       contents: write

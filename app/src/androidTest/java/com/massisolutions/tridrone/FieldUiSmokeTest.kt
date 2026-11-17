@@ -150,6 +150,95 @@ class FieldUiSmokeTest {
         }
     }
 
+    @Test fun projectCreationAndConsecutiveCollectionsThroughSurveyControls() {
+        val projectName = "Project A ${System.currentTimeMillis()}"
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val projectStore = ProjectStore.get(context)
+        val gnss = "instrumentation-gnss"
+        val sounder = "instrumentation-sounder"
+        val gga = "GPGGA,123519,4048.0000,N,07303.0000,W,4,12,0.7,10.2,M,-30.0,M,,"
+        val checksum = gga.fold(0) { value, char -> value xor char.code }
+        val sentence = "$" + gga + "*" + checksum.toString(16).uppercase().padStart(2, '0')
+        fun feed() {
+            val utc = System.currentTimeMillis()
+            val nanos = android.os.SystemClock.elapsedRealtimeNanos()
+            val depth = "1 0.93 0 0 0 11.0 100 0"
+            val bytes = "$depth\r\n".toByteArray()
+            HydroLive.gnssSentence(gnss, sentence, utc, nanos)
+            HydroLive.rawDepth(sounder, bytes, bytes.size)
+            HydroLive.frame(sounder, depth, utc, nanos)
+        }
+
+        try {
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                onView(withId(R.id.tab_sessions)).perform(click())
+                onView(withText("Projects and collection history")).perform(scrollTo(), click())
+                awaitText("Create new project")
+                screenshot("projects")
+                onView(withText("Create new project")).inRoot(isDialog()).perform(click())
+                onView(withHint("Project name")).inRoot(isDialog()).perform(replaceText(projectName), closeSoftKeyboard())
+                onView(withText("Save")).inRoot(isDialog()).perform(click())
+                awaitText("Collection history (0)")
+                onView(withText("Projects")).inRoot(isDialog()).perform(click())
+                awaitText("Create new project")
+                onView(withText("Close")).inRoot(isDialog()).perform(click())
+                onView(withId(R.id.tab_survey)).perform(click())
+                awaitText("Project • $projectName", displayed = false)
+
+                HydroLive.claimGnss(gnss)
+                HydroLive.gnssConnection(gnss, true)
+                HydroLive.claimSounder(sounder)
+                HydroLive.sounderConnection(sounder, true)
+                for (count in listOf(2, 3, 4)) {
+                    scenario.onActivity { activity ->
+                        feed()
+                        activity.findViewById<android.view.View>(R.id.survey_start_stop).performClick()
+                        assertTrue("Go must open a collection", HydroLive.recording)
+                    }
+                    repeat(count) { feed() }
+                    onView(withId(R.id.survey_start_stop)).perform(scrollTo(), click())
+                    assertFalse(HydroLive.recording)
+                }
+                scenario.recreate()
+                awaitText("Project • $projectName", displayed = false)
+                val project = checkNotNull(projectStore.activeProject())
+                assertEquals(projectName, project.name)
+                assertEquals(listOf(2L, 3L, 4L), projectStore.sessions(project.id)
+                    .sortedBy { it.number }.map { it.observationCount })
+
+                onView(withId(R.id.tab_sessions)).perform(click())
+                onView(withText("Projects and collection history")).perform(scrollTo(), click())
+                awaitText(projectName)
+                onView(withText(projectName)).inRoot(isDialog()).perform(click())
+                awaitText("Collection history (3)")
+                onView(withText("Collection history (3)")).inRoot(isDialog()).perform(click())
+                awaitText("$projectName collection history")
+                screenshot("collection-history")
+            }
+        } finally {
+            if (HydroLive.recording) HydroLive.stop()
+            HydroLive.gnssConnection(gnss, false)
+            HydroLive.sounderConnection(sounder, false)
+        }
+    }
+
+    private fun awaitText(text: String, displayed: Boolean = true) {
+        val deadline = android.os.SystemClock.uptimeMillis() + 8_000
+        var failure: Throwable
+        do {
+            try {
+                onView(withText(text)).check(matches(if (displayed) isDisplayed() else withText(text)))
+                return
+            } catch (error: androidx.test.espresso.NoMatchingViewException) {
+                failure = error
+            } catch (error: AssertionError) {
+                failure = error
+            }
+            android.os.SystemClock.sleep(100)
+        } while (android.os.SystemClock.uptimeMillis() < deadline)
+        throw failure
+    }
+
     private fun openEquipmentSettings() {
         onView(withId(R.id.tab_settings)).perform(click())
         onView(withText("Antenna / transducer vertical offset")).perform(scrollTo(), click())

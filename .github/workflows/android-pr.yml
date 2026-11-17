@@ -2,7 +2,7 @@ name: Validate Android pull requests
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feature/issue-7-live-hydrography]
 
 permissions:
   contents: read
@@ -45,6 +45,7 @@ jobs:
             app/build/reports/tests/testDebugUnitTest/
             app/build/test-results/testDebugUnitTest/
             app/build/reports/lint-results-debug.*
+            app/build/outputs/test-artifacts/sample-project.zip
           if-no-files-found: warn
 
   emulator-smoke:
