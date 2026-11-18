@@ -25,13 +25,23 @@ internal class ProjectExport(private val db: SQLiteDatabase, private val root: F
         ZipOutputStream(output).use { zip ->
             zip.entry("$name.csv", collection.startedUtc) { session(collection, zip) }
             val attachmentPaths = copyAttachments(collection, zip, "", includeDiagnostic = true)
+            val pnezd = "$name.pnezd.txt"
+            var verifiedPoints = 0
+            if (collection.extendedCsv) {
+                zip.entry(pnezd, collection.startedUtc) { verifiedPoints = writePnezd(collection, zip) }
+            }
             zip.entry("session.json", collection.startedUtc) {
-                zip.write(collectionJson(collection, "$name.csv", attachmentPaths).bytes())
+                val info = collectionJson(collection, "$name.csv", attachmentPaths).apply {
+                    if (collection.extendedCsv) put("pnezd_file", pnezd).put("pnezd_verified_count", verifiedPoints)
+                }
+                zip.write(info.bytes())
             }
         }
     }
 
     fun project(project: SurveyProject, collections: List<CollectionSession>, output: OutputStream) {
+        val extended = collections.any { it.extendedCsv }
+        val combinedHeader = if (extended) HydroCsv.ceeHeader else HydroCsv.header
         val manifest = JSONObject()
             .put("schema_version", 1)
             .put("project_id", project.id)
@@ -42,6 +52,7 @@ internal class ProjectExport(private val db: SQLiteDatabase, private val root: F
             .put("archived", project.archived)
             .put("offline_map_reference", project.offlineMapReference ?: JSONObject.NULL)
             .put("combined_csv", "combined.csv")
+            .put("combined_csv_schema_version", if (extended) 2 else 1)
             .put("encoding", "UTF-8")
             .put("combined_order", "collection number, then original acquisition order")
             .put("timestamp_basis", "metadata times are ISO 8601 UTC; CSV measurement timestamps retain acquisition values")
@@ -60,8 +71,11 @@ internal class ProjectExport(private val db: SQLiteDatabase, private val root: F
             }
             zip.entry("combined.csv", project.createdUtc) {
                 val writer = zip.bufferedWriter(Charsets.UTF_8)
-                writer.appendLine("project_id,session_id,observation_id,${HydroCsv.header.trimEnd('\n')}")
-                for (collection in collections) writeRows(collection, writer, includeIdentifiers = true)
+                writer.appendLine("project_id,session_id,observation_id,${combinedHeader.trimEnd('\n')}")
+                for (collection in collections) {
+                    writeRows(collection, writer, includeIdentifiers = true,
+                        padExtendedColumns = extended && !collection.extendedCsv)
+                }
                 writer.flush()
             }
             manifest.put("sessions", entries)
@@ -70,7 +84,8 @@ internal class ProjectExport(private val db: SQLiteDatabase, private val root: F
     }
 
     private fun writeRows(
-        collection: CollectionSession, writer: BufferedWriter, includeIdentifiers: Boolean = false
+        collection: CollectionSession, writer: BufferedWriter, includeIdentifiers: Boolean = false,
+        padExtendedColumns: Boolean = false
     ) {
         db.rawQuery("SELECT id, csv_row FROM observations WHERE session_id = ? ORDER BY sequence",
             arrayOf(collection.id)).use { rows ->
@@ -79,9 +94,27 @@ internal class ProjectExport(private val db: SQLiteDatabase, private val root: F
                     writer.append(collection.projectId).append(',')
                         .append(collection.id).append(',').append(rows.getString(0)).append(',')
                 }
-                writer.appendLine(rows.getString(1))
+                writer.append(rows.getString(1))
+                if (padExtendedColumns) writer.append(",".repeat(HydroCsv.ceeColumns.size - HydroCsv.columns.size))
+                writer.newLine()
             }
         }
+    }
+
+    private val CollectionSession.extendedCsv get() = csvHeader == HydroCsv.ceeHeader.trimEnd('\n')
+
+    private fun writePnezd(collection: CollectionSession, output: OutputStream): Int {
+        val writer = output.bufferedWriter(Charsets.UTF_8)
+        val formatter = HydroPnezd(collection.csvHeader.split(','))
+        db.rawQuery("SELECT csv_row FROM observations WHERE session_id = ? ORDER BY sequence",
+            arrayOf(collection.id)).use { rows ->
+            while (rows.moveToNext()) {
+                val row = HydroCsvRecords(rows.getString(0).reader().buffered()).next()?.cells ?: continue
+                formatter.point(row)?.let(writer::appendLine)
+            }
+        }
+        writer.flush()
+        return formatter.count
     }
 
     private fun collectionJson(collection: CollectionSession, csvPath: String, attachments: List<String>) =
@@ -97,6 +130,7 @@ internal class ProjectExport(private val db: SQLiteDatabase, private val root: F
             .put("observation_count", collection.observationCount)
             .put("valid_paired_count", collection.validCount)
             .put("csv", csvPath)
+            .put("csv_schema_version", if (collection.extendedCsv) 2 else 1)
             .put("acquisition_settings", collection.metadata)
             .put("attachments", JSONArray(attachments)).apply {
                 if ("sounder_diagnostic.bin" in attachments) {
@@ -113,7 +147,12 @@ internal class ProjectExport(private val db: SQLiteDatabase, private val root: F
         .put("precision_received_utc_ms", "milliseconds since Unix epoch (UTC)")
         .put("latitude_deg", "decimal degrees")
         .put("longitude_deg", "decimal degrees")
-        .put("raw_depth_m", "meters (provisional sounder interpretation)")
+        .put("raw_depth_m", "meters (converted from the selected sounder's uncorrected reading)")
+        .put("raw_dbt_m", "meters below the CEE-LINE transducer")
+        .put("transducer_below_waterline_usft", "US survey feet, positive submerged")
+        .put("water_depth_m", "meters below the water surface")
+        .put("water_depth_usft", "US survey feet below the water surface")
+        .put("gps_to_transducer_usft", "US survey feet, positive downward from the selected GNSS reference")
         .put("raw_gga_altitude_m", "meters, GGA reported MSL reference")
         .put("h_precision_m", "meters")
         .put("v_precision_m", "meters")

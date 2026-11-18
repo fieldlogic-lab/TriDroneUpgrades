@@ -6,12 +6,13 @@ plugins {
 android {
     namespace = "com.massisolutions.tridrone"
     compileSdk = 35
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "com.massisolutions.tridrone"
         minSdk = 26
         targetSdk = 35
-        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()?.plus(1000) ?: 3
+        versionCode = 2000 + (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1)
         val testRun = System.getenv("GITHUB_RUN_NUMBER") ?: "local"
         val sourceCommit = System.getenv("GITHUB_SHA")?.take(7) ?: "uncommitted"
         versionName = "0.4.0-test.$testRun.$sourceCommit"
@@ -41,6 +42,7 @@ android {
 
 dependencies {
     implementation("androidx.core:core:1.13.1")
+    implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
     androidTestImplementation("androidx.test:core:1.6.1")

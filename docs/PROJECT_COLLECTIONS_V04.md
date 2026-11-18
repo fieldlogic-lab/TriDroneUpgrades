@@ -2,7 +2,7 @@
 
 ## Field workflow
 
-Open **Projects** from Survey or **Projects and collection history** from Sessions. Create a project or open an existing project. The Survey screen shows the selected project and restores that selection when the app opens. Each Start creates a numbered collection. Stop finalizes it, and the next Start creates a new collection in the same project. Live acquisition still requires fresh provisional sounder data and a paired external GNSS epoch.
+Open **Projects** from Survey or **Projects and collection history** from Sessions. Create a project or open an existing project. The Survey screen shows the selected project and restores that selection when the app opens. Each Start creates a numbered collection. Stop finalizes it, and the next Start creates a new collection in the same project. Live acquisition requires fresh depth from the selected sounder and a paired external GNSS epoch. HydroLite Plus retains its provisional decoder. CEE-LINE USB requires RTK FIX or FLOAT and a configured waterline offset. See the [unified sounder field checklist](UNIFIED_SOUNDER_FIELD_TEST.md).
 
 Collection history shows the start, end, duration, status, and count. Open a collection to see pairing statistics, acquisition settings, and a preview of the first 100 observations. Users can rename projects and collections, and archive or restore projects. Archived projects remain available for review and export. The app provides no deletion action for projects or collections.
 
@@ -25,16 +25,16 @@ The recorder commits each decoded event independently, including invalid or unpa
 
 Build 1092 kept live recordings as app-private `hydro_surveys/hydro_<timestamp>.csv` files with supporting metadata and raw captures. Its main export command only selected the newest file. Its timestamp-based filenames could also collide if two starts used the same millisecond. v0.4 uses unique identities for both collections and raw capture filenames.
 
-The first database open discovers compatible Build 1092 hydrographic CSVs. Import runs in a transaction per file, preserves original timestamps and serialized rows, and groups historical collections by the saved project name where available. Imported collections have an estimated end time based on saved observations. The import leaves originals in place and uses a unique legacy filename to avoid duplicate import. Import notices identify unsupported or malformed files and rows. The **Original hydrographic CSV files** action can still share the originals. Historical data that an earlier build already overwrote cannot be reconstructed. Phone GPS, simulated data, and device diagnostics keep their existing separate storage.
+The first database open discovers compatible hydrographic CSVs in the operational package, including original Build 1092 files. Import runs in a transaction per file, preserves original timestamps and serialized rows, and groups historical collections by the saved project name where available. Imported collections have an estimated end time based on saved observations. The import leaves originals in place and uses a unique legacy filename to avoid duplicate import. Import notices identify unsupported or malformed files and rows. The **Original hydrographic CSV files** action can still share the originals. Historical data that an earlier build already overwrote cannot be reconstructed. Phone GPS, simulated data, and device diagnostics keep their existing separate storage.
 
 The database schema is new in v0.4. An earlier APK cannot browse collections recorded only in this database. Export v0.4 collections before returning to an earlier build. The installable test APK uses the operational application ID so an in-place upgrade can read the original app-private files. Android requires the same signing certificate for an in-place upgrade.
 
 ## Export package
 
-Individual collection export uses the Build 1092 CSV header and acquisition values. An individual audit ZIP also includes available raw capture files and metadata. Project export writes a ZIP with:
+Individual collection export retains the original header and acquisition values. HydroLite uses the original 37 columns. CEE-LINE uses 43 columns, including the appended DBT and waterline fields. An individual audit ZIP also includes available raw capture files and metadata. Project export writes a ZIP with:
 
 - `manifest.json` with package schema version 1, project details, measurement units, and a collection index.
-- `combined.csv` with `project_id`, `session_id`, and `observation_id` prepended to the existing CSV columns.
+- `combined.csv` with `project_id`, `session_id`, and `observation_id` prepended to the acquisition columns. A project with CEE-LINE collections uses the 43-column acquisition schema. Older 37-column rows have empty values in the appended columns. The manifest identifies the combined and individual CSV schema versions.
 - `collections/<session-uuid>/observations.csv` and `session.json` for each collection.
 - Scoped raw GNSS and sounder captures where available, plus original legacy files where malformed records could not be imported.
 

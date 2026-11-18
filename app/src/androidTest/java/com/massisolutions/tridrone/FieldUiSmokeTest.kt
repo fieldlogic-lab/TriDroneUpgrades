@@ -42,7 +42,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Real Android UI exercise. No GNSS/depth fixtures or fake sensor observations are injected. */
+/** Android UI exercise. The collection-flow test feeds synthetic sensor frames into the real coordinator. */
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class FieldUiSmokeTest {
@@ -104,16 +104,23 @@ class FieldUiSmokeTest {
 
     @Test fun equipmentSavedFromDialogSurvivesActivityRecreation() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val file = HydroLive.equipmentFile(context)
+        val file = HydroLive.equipmentFile(context, CeeLineDbt.PROTOCOL)
+        val hydroFile = HydroLive.equipmentFile(context)
+        val hydroOriginal = if (hydroFile.exists()) hydroFile.readBytes() else null
         val original = if (file.exists()) file.readBytes() else null
         try {
             EquipmentSettings().save(file)
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 try {
+                    step("select CEE-LINE") { chooseSounder(cee = true) }
                     step("open equipment") { openEquipmentSettings() }
                     step("enter offset") {
-                        onView(withHint("Vertical offset in US survey feet (unset by default)"))
+                        onView(withHint("GNSS reference to transducer (+ US survey ft)"))
                             .inRoot(isDialog()).perform(scrollTo(), replaceText("3.25"), closeSoftKeyboard())
+                    }
+                    step("enter waterline measurement") {
+                        onView(withHint("Transducer below waterline (+ US survey ft)"))
+                            .inRoot(isDialog()).perform(scrollTo(), replaceText("0.70"), closeSoftKeyboard())
                     }
                     step("open reference dropdown") {
                         onView(isAssignableFrom(Spinner::class.java)).inRoot(isDialog()).perform(scrollTo(), click())
@@ -128,17 +135,23 @@ class FieldUiSmokeTest {
                         onView(withText("Save")).inRoot(isDialog()).perform(click())
                     }
                     assertEquals(3.25, EquipmentSettings.load(file).offsetUsft!!, 0.0)
+                    assertEquals(0.70, EquipmentSettings.load(file).waterlineOffsetUsft!!, 0.0)
                     assertTrue(EquipmentSettings.load(file).confirmed)
                     step("recreate activity") { scenario.recreate() }
                     step("reopen equipment") { openEquipmentSettings() }
                     step("verify restored configuration") {
-                        onView(withHint("Vertical offset in US survey feet (unset by default)"))
+                        onView(withHint("GNSS reference to transducer (+ US survey ft)"))
                             .inRoot(isDialog()).perform(scrollTo()).check(matches(withText("3.25")))
+                        onView(withHint("Transducer below waterline (+ US survey ft)"))
+                            .inRoot(isDialog()).perform(scrollTo()).check(matches(withText("0.7")))
                         onView(withText("I verified offset and receiver height reference; no duplicate antenna correction"))
                             .inRoot(isDialog()).perform(scrollTo()).check(matches(isChecked()))
                     }
                     screenshot("equipment-settings-restored")
                     onView(withText("Cancel")).inRoot(isDialog()).perform(click())
+                    chooseSounder(cee = false)
+                    if (hydroOriginal == null) assertFalse(hydroFile.exists())
+                    else assertArrayEquals(hydroOriginal, hydroFile.readBytes())
                 } catch (failure: Throwable) {
                     // Capture while the failing dialog is still present, before ActivityScenario closes.
                     runCatching { screenshot("equipment-failure") }
@@ -147,6 +160,8 @@ class FieldUiSmokeTest {
             }
         } finally {
             if (original == null) file.delete() else file.writeBytes(original)
+            context.getSharedPreferences("sounder_profile", android.content.Context.MODE_PRIVATE)
+                .edit().putString("profile", "HYDROLITE").commit()
         }
     }
 
@@ -155,14 +170,20 @@ class FieldUiSmokeTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val projectStore = ProjectStore.get(context)
         val gnss = "instrumentation-gnss"
-        val sounder = "instrumentation-sounder"
+        val hydroSounder = "instrumentation-sounder"
+        val ceeSounder = CeeLineUsbService.SOURCE
+        val ceeEquipment = HydroLive.equipmentFile(context, CeeLineDbt.PROTOCOL)
+        val originalCeeEquipment = if (ceeEquipment.exists()) ceeEquipment.readBytes() else null
         val gga = "GPGGA,123519,4048.0000,N,07303.0000,W,4,12,0.7,10.2,M,-30.0,M,,"
         val checksum = gga.fold(0) { value, char -> value xor char.code }
         val sentence = "$" + gga + "*" + checksum.toString(16).uppercase().padStart(2, '0')
-        fun feed() {
+        val dbt = "SDDBT,,f,4.2,M,,F"
+        val dbtChecksum = dbt.fold(0) { value, char -> value xor char.code }
+        fun feed(sounder: String) {
             val utc = System.currentTimeMillis()
             val nanos = android.os.SystemClock.elapsedRealtimeNanos()
-            val depth = "1 0.93 0 0 0 11.0 100 0"
+            val depth = if (sounder == ceeSounder) "\$$dbt*%02X".format(dbtChecksum)
+                else "1 0.93 0 0 0 11.0 100 0"
             val bytes = "$depth\r\n".toByteArray()
             HydroLive.gnssSentence(gnss, sentence, utc, nanos)
             HydroLive.rawDepth(sounder, bytes, bytes.size)
@@ -170,6 +191,7 @@ class FieldUiSmokeTest {
         }
 
         try {
+            EquipmentSettings(3.25, "ANTENNA_REFERENCE_POINT", true, 1000L, 0.7).save(ceeEquipment)
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 onView(withId(R.id.tab_sessions)).perform(click())
                 onView(withText("Projects and collection history")).perform(scrollTo(), click())
@@ -187,15 +209,19 @@ class FieldUiSmokeTest {
 
                 HydroLive.claimGnss(gnss)
                 HydroLive.gnssConnection(gnss, true)
-                HydroLive.claimSounder(sounder)
-                HydroLive.sounderConnection(sounder, true)
-                for (count in listOf(2, 3, 4)) {
+                for ((index, count) in listOf(2, 3, 4).withIndex()) {
+                    val cee = index == 1
+                    chooseSounder(cee)
+                    val sounder = if (cee) ceeSounder else hydroSounder
+                    onView(withId(R.id.tab_survey)).perform(click())
+                    HydroLive.claimSounder(sounder)
+                    HydroLive.sounderConnection(sounder, true)
                     scenario.onActivity { activity ->
-                        feed()
+                        feed(sounder)
                         activity.findViewById<android.view.View>(R.id.survey_start_stop).performClick()
                         assertTrue("Go must open a collection", HydroLive.recording)
                     }
-                    repeat(count) { feed() }
+                    repeat(count) { feed(sounder) }
                     onView(withId(R.id.survey_start_stop)).perform(scrollTo(), click())
                     assertFalse(HydroLive.recording)
                 }
@@ -203,8 +229,12 @@ class FieldUiSmokeTest {
                 awaitText("Project • $projectName", displayed = false)
                 val project = checkNotNull(projectStore.activeProject())
                 assertEquals(projectName, project.name)
-                assertEquals(listOf(2L, 3L, 4L), projectStore.sessions(project.id)
-                    .sortedBy { it.number }.map { it.observationCount })
+                val sessions = projectStore.sessions(project.id).sortedBy { it.number }
+                assertEquals(listOf(2L, 3L, 4L), sessions.map { it.observationCount })
+                assertEquals(listOf(HydroLiteDecoder.PROTOCOL, CeeLineDbt.PROTOCOL, HydroLiteDecoder.PROTOCOL),
+                    sessions.map { it.metadata.getString("protocol") })
+                assertEquals(listOf(37, 43, 37), sessions.map { it.csvHeader.split(',').size })
+                assertEquals(0.7, sessions[1].metadata.getDouble("transducer_below_waterline_usft"), 0.0)
 
                 onView(withId(R.id.tab_sessions)).perform(click())
                 onView(withText("Projects and collection history")).perform(scrollTo(), click())
@@ -218,8 +248,20 @@ class FieldUiSmokeTest {
         } finally {
             if (HydroLive.recording) HydroLive.stop()
             HydroLive.gnssConnection(gnss, false)
-            HydroLive.sounderConnection(sounder, false)
+            HydroLive.sounderConnection(hydroSounder, false)
+            HydroLive.sounderConnection(ceeSounder, false)
+            if (originalCeeEquipment == null) ceeEquipment.delete() else ceeEquipment.writeBytes(originalCeeEquipment)
+            context.getSharedPreferences("sounder_profile", android.content.Context.MODE_PRIVATE)
+                .edit().putString("profile", "HYDROLITE").commit()
         }
+    }
+
+    private fun chooseSounder(cee: Boolean) {
+        onView(withId(R.id.tab_survey)).perform(click())
+        onView(withId(R.id.survey_sounder_status)).perform(scrollTo(), click())
+        onView(withText(startsWith("Sounder profile •"))).perform(scrollTo(), click())
+        onView(withText(if (cee) "CEE-LINE USB • NMEA DBT" else "HydroLite Plus (existing provisional decoder)"))
+            .inRoot(isDialog()).perform(click())
     }
 
     private fun awaitText(text: String, displayed: Boolean = true) {

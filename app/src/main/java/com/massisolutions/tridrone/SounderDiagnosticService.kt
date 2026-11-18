@@ -47,6 +47,10 @@ class SounderDiagnosticService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (HydroLive.selectedProtocol(this) != HydroLiteDecoder.PROTOCOL) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (!running.compareAndSet(false, true)) return START_NOT_STICKY
         HydroLive.claimSounder(hydroSource)
         val address = intent?.getStringExtra("address").orEmpty()

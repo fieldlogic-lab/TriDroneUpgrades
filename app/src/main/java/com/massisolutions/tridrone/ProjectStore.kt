@@ -152,7 +152,7 @@ class ProjectStore internal constructor(
         val snapshot = JSONObject(metadata.toString()).put("project_id", selected.id).put("project", selected.name)
         require(legacyStem == null || SAFE_STEM.matches(legacyStem)) { "Invalid recording name" }
         val session = insertSession(this, projectId, startedUtc, snapshot, legacyStem,
-            HydroCsv.header.trimEnd('\n'), CollectionStatus.RECORDING)
+            HydroCsv.headerFor(snapshot.optString("protocol")).trimEnd('\n'), CollectionStatus.RECORDING)
         touchProject(this, projectId, startedUtc)
         session
     }
@@ -163,7 +163,7 @@ class ProjectStore internal constructor(
             """INSERT INTO observations(id, session_id, project_id, utc_ms, elapsed_ns, latitude,
                 longitude, raw_depth_m, valid, csv_row)
                 SELECT ?, s.id, s.project_id, ?, ?, ?, ?, ?, ?, ? FROM sessions s
-                WHERE s.id = ? AND s.status = 'RECORDING'"""
+                WHERE s.id = ? AND s.status = 'RECORDING' AND s.csv_header = ?"""
         ).use { statement ->
             statement.bindString(1, UUID.randomUUID().toString())
             statement.bindLong(2, depth.utcMillis)
@@ -174,7 +174,8 @@ class ProjectStore internal constructor(
             statement.bindLong(7, if (depth.valid && paired != null) 1 else 0)
             statement.bindString(8, csvRow.removeSuffix("\n"))
             statement.bindString(9, sessionId)
-            check(statement.executeInsert() != -1L) { "Collection is no longer recording" }
+            statement.bindString(10, HydroCsv.headerFor(depth.protocol).trimEnd('\n'))
+            check(statement.executeInsert() != -1L) { "No active collection for this sounder protocol" }
         }
     }
 
@@ -197,14 +198,17 @@ class ProjectStore internal constructor(
     ): List<SurveyPosition> = positions("project_id", id, afterUtc, afterId, limit)
 
     fun positionsForSession(
-        id: String, afterUtc: Long = Long.MIN_VALUE, afterId: String = "", limit: Int = 1000
-    ): List<SurveyPosition> = positions("session_id", id, afterUtc, afterId, limit)
+        id: String, afterUtc: Long = Long.MIN_VALUE, afterId: String = "", limit: Int = 1000, validOnly: Boolean = false
+    ): List<SurveyPosition> = positions("session_id", id, afterUtc, afterId, limit, validOnly)
 
-    private fun positions(column: String, id: String, afterUtc: Long, afterId: String, limit: Int): List<SurveyPosition> {
+    private fun positions(
+        column: String, id: String, afterUtc: Long, afterId: String, limit: Int, validOnly: Boolean = false
+    ): List<SurveyPosition> {
         require(limit > 0)
         return db.rawQuery(
             """SELECT id, session_id, utc_ms, latitude, longitude, raw_depth_m, valid FROM observations
                 WHERE $column = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
+                ${if (validOnly) "AND valid = 1" else ""}
                 AND utc_ms >= ? AND (utc_ms > ? OR id > ?)
                 ORDER BY utc_ms, id LIMIT ?""",
             arrayOf(id, afterUtc.toString(), afterUtc.toString(), afterId, limit.toString())
@@ -281,7 +285,9 @@ class ProjectStore internal constructor(
             try {
                 val rejected = file.bufferedReader().use { reader ->
                     val header = reader.readLine().orEmpty().removePrefix("\uFEFF")
-                    check(header == HydroCsv.header.trimEnd('\n')) { "Unrecognized CSV columns" }
+                    check(header == HydroCsv.header.trimEnd('\n') || header == HydroCsv.ceeHeader.trimEnd('\n')) {
+                        "Unrecognized CSV columns"
+                    }
                     val (projectName, metadata) = legacyMetadata(stem)
                     database.transaction {
                         val started = metadata.optLong("started_utc_ms", stem.removePrefix("hydro_").toLong())
@@ -329,7 +335,7 @@ class ProjectStore internal constructor(
     ): Long {
         var rejected = 0L
         var ended = collection.startedUtc
-        val index = HydroCsv.columns.withIndex().associate { it.value to it.index }
+        val index = collection.csvHeader.split(',').withIndex().associate { it.value to it.index }
         fun List<String>.field(name: String) = this[index.getValue(name)]
         val records = HydroCsvRecords(reader)
         while (true) {

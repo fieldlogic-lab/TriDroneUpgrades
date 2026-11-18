@@ -43,7 +43,9 @@ class ProjectStoreTest {
         expectedCounts.forEachIndexed { index, size ->
             val sessionStart = start + index * 1_000_000L
             val stem = "hydro_${sessionStart}_sample"
-            val metadata = JSONObject().put("synthetic", true)
+            val protocol = if (index == 1) CeeLineDbt.PROTOCOL else HydroLiteDecoder.PROTOCOL
+            val configuration = if (index == 1) equipment.copy(waterlineOffsetUsft = 0.7) else equipment
+            val metadata = JSONObject().put("synthetic", true).put("protocol", protocol)
                 .put("vertical_offset_usft", equipment.offsetUsft)
                 .put("antenna_reference", equipment.antennaReference)
                 .put("offset_confirmed", equipment.confirmed)
@@ -52,10 +54,14 @@ class ProjectStoreTest {
             val collection = initial.startSession(project.id, sessionStart, metadata, stem)
             assertEquals("Collection 00${index + 1}", collection.name)
             val csv = buildString {
-                append(HydroCsv.header)
+                append(HydroCsv.headerFor(protocol))
                 repeat(size) { row ->
-                    val (depth, gnss) = sample(sessionStart, row)
-                    val original = HydroCsv.row(depth, gnss, equipment, "UNKNOWN")
+                    val (fixture, gnss) = sample(sessionStart, row)
+                    val depth = if (protocol == CeeLineDbt.PROTOCOL) {
+                        CeeLineDbt.decode(withChecksum("\$SDDBT,,f,4.2,M,,F"), fixture.utcMillis, fixture.elapsedNanos)
+                    } else fixture
+                    assertTrue(depth.valid)
+                    val original = HydroCsv.row(depth, gnss, configuration, "UNKNOWN")
                     initial.append(collection.id, depth, gnss, original)
                     append(original)
                 }
@@ -96,6 +102,7 @@ class ProjectStoreTest {
             assertEquals(1, manifest.getInt("schema_version"))
             assertEquals(project.id, manifest.getString("project_id"))
             assertEquals("combined.csv", manifest.getString("combined_csv"))
+            assertEquals(2, manifest.getInt("combined_csv_schema_version"))
             assertTrue(manifest.getJSONObject("measurement_units").getString("raw_depth_m").startsWith("meters"))
             val sessions = manifest.getJSONArray("sessions")
             assertEquals(3, sessions.length())
@@ -103,6 +110,7 @@ class ProjectStoreTest {
                 val entry = sessions.getJSONObject(index)
                 assertEquals(collection.id, entry.getString("session_id"))
                 assertEquals(expectedCounts[index], entry.getInt("observation_count"))
+                assertEquals(if (index == 1) 2 else 1, entry.getInt("csv_schema_version"))
                 assertTrue(entry.getJSONObject("acquisition_settings").getBoolean("synthetic"))
                 assertEquals(2.75, entry.getJSONObject("acquisition_settings").getDouble("vertical_offset_usft"), 0.0)
                 assertEquals(expectedCsv.getValue(collection.id), archive.getValue(entry.getString("csv")).decodeToString())
@@ -114,13 +122,15 @@ class ProjectStoreTest {
 
             val combined = archive.getValue("combined.csv").decodeToString().trimEnd('\n').lines()
             assertEquals(451, combined.size)
-            assertEquals("project_id,session_id,observation_id," + HydroCsv.header.trimEnd('\n'), combined.first())
+            assertEquals("project_id,session_id,observation_id," + HydroCsv.ceeHeader.trimEnd('\n'), combined.first())
             val rows = combined.drop(1).map { it.split(',', limit = 4) }
             assertTrue(rows.all { it[0] == project.id })
             assertEquals(450, rows.map { UUID.fromString(it[2]) }.toSet().size)
             val bySession = rows.groupBy { it[1] }
             for ((id, csv) in expectedCsv) {
-                assertEquals(csv.trimEnd('\n').lines().drop(1), bySession.getValue(id).map { it[3] })
+                val padding = if (csv.startsWith(HydroCsv.ceeHeader)) "" else ",".repeat(6)
+                assertEquals(csv.trimEnd('\n').lines().drop(1).map { it + padding },
+                    bySession.getValue(id).map { it[3] })
             }
             assertEquals(expectedCounts.map(Int::toLong), reopened.sessions(project.id).map { it.observationCount })
 
@@ -235,6 +245,11 @@ class ProjectStoreTest {
         } finally {
             reopened.close()
         }
+    }
+
+    private fun withChecksum(sentence: String): String {
+        val body = sentence.substringAfter('$').substringBefore('*')
+        return "\$$body*%02X".format(body.fold(0) { value, c -> value xor c.code })
     }
 
     private fun newStore() = ProjectStore(app, databaseName) { start }

@@ -152,6 +152,21 @@ internal class ProjectScreens(
         options["Review first 100 observations"] = {
             run({ store.previewRows(id) }) { showText("Observations • ${session.name}", it) }
         }
+        options["Review sounding locations"] = {
+            run({ store.positionsForSession(id, limit = 2000, validOnly = true) }) { points ->
+                val content = LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    val label = if (points.isEmpty()) "No valid paired sounding positions." else
+                        "First ${points.size} valid paired sounding positions • relative plot"
+                    addView(TextView(activity).apply { text = label; setPadding(padding, padding, padding, padding) })
+                    addView(SurveyMapView(activity).apply {
+                        tracks = listOf(points.map { it.latitude to it.longitude })
+                    }, LinearLayout.LayoutParams(-1, (activity.resources.displayMetrics.heightPixels * 0.6f).toInt()))
+                }
+                AlertDialog.Builder(activity).setTitle(session.name).setView(content)
+                    .setPositiveButton("Back") { _, _ -> showCollection(project, id) }.show()
+            }
+        }
         options["Rename collection"] = { renameCollection(project, session) }
         if (session.status != CollectionStatus.RECORDING) {
             options["Export collection CSV"] = { requestExport(id, "csv") }

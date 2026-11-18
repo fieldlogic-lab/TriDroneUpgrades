@@ -9,7 +9,8 @@ object SurveyUnits {
 }
 
 data class HydroDepth(val raw: String, val utcMillis: Long, val elapsedNanos: Long,
-    val meters: Double?, val validity: String, val diagnostic: String) {
+    val meters: Double?, val validity: String, val diagnostic: String,
+    val protocol: String = HydroLiteDecoder.PROTOCOL) {
     val valid get() = validity == "VALID_PROVISIONAL"
     fun status(connected: Boolean, nowNanos: Long): String = when {
         !connected -> "NO_READING_DISCONNECTED"
@@ -40,12 +41,15 @@ object HydroLiteDecoder {
 }
 
 data class EquipmentSettings(val offsetUsft: Double? = null, val antennaReference: String = "UNSET",
-    val confirmed: Boolean = false, val pairToleranceMillis: Long = 1000) {
+    val confirmed: Boolean = false, val pairToleranceMillis: Long = 1000,
+    val waterlineOffsetUsft: Double? = null) {
     val valid get() = offsetUsft != null && offsetUsft.isFinite() && offsetUsft >= 0 &&
         antennaReference in REFERENCES && confirmed && pairToleranceMillis in 1..5000
+    val ceeValid get() = valid && waterlineOffsetUsft != null && waterlineOffsetUsft.isFinite() && waterlineOffsetUsft >= 0
     fun save(file: File) {
         val properties = Properties().apply {
             setProperty("offset_usft", offsetUsft?.toString().orEmpty())
+            setProperty("waterline_offset_usft", waterlineOffsetUsft?.toString().orEmpty())
             setProperty("antenna_reference", antennaReference)
             setProperty("confirmed", confirmed.toString())
             setProperty("pair_tolerance_ms", pairToleranceMillis.toString())
@@ -61,7 +65,8 @@ data class EquipmentSettings(val offsetUsft: Double? = null, val antennaReferenc
             val p = Properties().apply { file.inputStream().use { load(it) } }
             EquipmentSettings(p.getProperty("offset_usft")?.toDoubleOrNull(),
                 p.getProperty("antenna_reference", "UNSET"), p.getProperty("confirmed") == "true",
-                p.getProperty("pair_tolerance_ms")?.toLongOrNull() ?: 1000)
+                p.getProperty("pair_tolerance_ms")?.toLongOrNull() ?: 1000,
+                p.getProperty("waterline_offset_usft")?.toDoubleOrNull())
         } catch (_: Exception) { EquipmentSettings() }
     }
 }
@@ -102,7 +107,10 @@ class HydroGnssState {
         return true
     }
     fun paired(depth: HydroDepth, toleranceMillis: Long): HydroGnss? = latest?.takeIf {
-        connected && depth.elapsedNanos - it.elapsedNanos in 0..toleranceMillis * 1_000_000 && it.quality in 1..5
+        val cee = depth.protocol == CeeLineDbt.PROTOCOL
+        val age = depth.elapsedNanos - it.elapsedNanos
+        connected && age in 0..toleranceMillis * 1_000_000 &&
+            if (cee) it.quality in 4..5 && age <= 3_000_000_000L else it.quality in 1..5
     }
 }
 
@@ -113,7 +121,11 @@ object HydroCsv {
         "vertical_offset_usft", "antenna_reference", "offset_confirmed", "bottom_navd88_usft", "horizontal_crs", "vertical_target",
         "horizontal_status", "vertical_status", "depth_validity", "pairing_status", "pair_delta_ms", "protocol", "raw_depth",
         "raw_gnss", "precision_raw", "precision_received_utc_ms", "pair_tolerance_ms", "timestamp_basis")
+    val ceeColumns = columns + listOf("schema_version", "raw_dbt_m", "transducer_below_waterline_usft", "water_depth_m", "water_depth_usft", "gps_to_transducer_usft")
     val header get() = columns.joinToString(",") + "\n"
+    val ceeHeader get() = ceeColumns.joinToString(",") + "\n"
+
+    fun headerFor(protocol: String) = if (protocol == CeeLineDbt.PROTOCOL) ceeHeader else header
     fun cell(value: Any?): String {
         val s = value?.toString().orEmpty()
         return if (s.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) "\"" + s.replace("\"", "\"\"") + "\"" else s
@@ -136,11 +148,17 @@ object HydroCsv {
             equipment.offsetUsft, equipment.antennaReference, equipment.confirmed, null, "EPSG:6539", "EPSG:6360",
             horizontalStatus, "WITHHELD_NO_VERIFIED_VERTICAL_TRANSFORM", depth.validity,
             if (gnss != null) "PAIRED_RECEIPT_TIME" else "MISSING_OR_STALE_GNSS",
-            gnss?.let { (depth.elapsedNanos - it.elapsedNanos) / 1_000_000.0 }, HydroLiteDecoder.PROTOCOL,
+            gnss?.let { (depth.elapsedNanos - it.elapsedNanos) / 1_000_000.0 }, depth.protocol,
             depth.raw, gnss?.raw, gnss?.precisionRaw, gnss?.precisionReceivedUtcMillis, equipment.pairToleranceMillis,
             "DEVICE_RECEIPT_UTC_AND_MONOTONIC;SENSOR_LATENCY_UNVERIFIED")
-        check(values.size == columns.size)
-        return values.joinToString(",") { cell(it) } + "\n"
+        val fields = if (depth.protocol == CeeLineDbt.PROTOCOL) {
+            val waterDepth = if (depth.valid) WaterDepth.meters(
+                depth.meters, equipment.waterlineOffsetUsft?.div(SurveyUnits.US_FEET_PER_METER)
+            ) else null
+            values + listOf("2", depth.meters, equipment.waterlineOffsetUsft, waterDepth,
+                waterDepth?.let(SurveyUnits::feet), equipment.offsetUsft)
+        } else values
+        return fields.joinToString(",") { cell(it) } + "\n"
     }
 }
 

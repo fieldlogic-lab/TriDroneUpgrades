@@ -60,15 +60,24 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
       - name: Verify APK signature
         run: '"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk'
+      - name: Read APK version code
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_code=$("$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk |
+            sed -n "s/^package:.* versionCode='\([0-9][0-9]*\)'.*/\1/p")
+          test -n "$version_code"
+          echo "TRIDRONE_APK_VERSION_CODE=$version_code" >> "$GITHUB_ENV"
+
       - name: Identify installable test build
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p app/build/identified-apk
-          cp app/build/outputs/apk/debug/app-debug.apk "app/build/identified-apk/TriDrone-build-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "app/build/identified-apk/TriDrone-build-${TRIDRONE_APK_VERSION_CODE}-${GITHUB_SHA:0:7}.apk"
           {
-            echo "TriDrone test build $GITHUB_RUN_NUMBER"
-            echo "Version code: $((1000 + GITHUB_RUN_NUMBER))"
+            echo "TriDrone test build $TRIDRONE_APK_VERSION_CODE"
+            echo "Version code: $TRIDRONE_APK_VERSION_CODE"
             echo "Commit: $GITHUB_SHA"
             echo "Source: $GITHUB_REF"
             echo "Install the APK in this ZIP directly. The published in-app update feed does not deliver draft PR artifacts."
@@ -76,7 +85,7 @@ jobs:
       - name: Publish installable debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: TriDrone-Logger-build-${{ github.run_number }}
+          name: TriDrone-Logger-build-${{ env.TRIDRONE_APK_VERSION_CODE }}
           path: app/build/identified-apk/
           if-no-files-found: error
 
@@ -89,7 +98,7 @@ jobs:
           set -euo pipefail
           APK="app/build/outputs/apk/debug/app-debug.apk"
           SHA=$(sha256sum "$APK" | cut -d' ' -f1)
-          VERSION=$((1000 + GITHUB_RUN_NUMBER))
+          VERSION=$TRIDRONE_APK_VERSION_CODE
           cp "$APK" "$RUNNER_TEMP/tridrone.apk"
           jq -nc --argjson versionCode "$VERSION" --arg apkUrl "https://github.com/$GITHUB_REPOSITORY/releases/download/dev-latest/tridrone.apk" --arg sha256 "$SHA" '{versionCode:$versionCode,apkUrl:$apkUrl,sha256:$sha256}' > "$RUNNER_TEMP/latest.json"
           if ! gh release view dev-latest -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
