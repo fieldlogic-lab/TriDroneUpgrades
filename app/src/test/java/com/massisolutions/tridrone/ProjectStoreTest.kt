@@ -247,6 +247,32 @@ class ProjectStoreTest {
         }
     }
 
+    @Test
+    fun previousUsbServiceCannotInvalidateOrFeedTheNewOwner() {
+        val previous = "old-usb-service"
+        val replacement = "new-usb-service"
+        val dbt = withChecksum("\$SDDBT,,f,4.2,M,,F")
+        try {
+            HydroLive.claimSounder(previous, CeeLineDbt.PROTOCOL)
+            HydroLive.sounderConnection(previous, true)
+            HydroLive.claimSounder(replacement, CeeLineDbt.PROTOCOL)
+            HydroLive.sounderConnection(replacement, true)
+            HydroLive.frame(replacement, dbt, start, 2_000_000_000)
+            assertEquals(4.2, checkNotNull(HydroLive.depth?.meters), 0.0)
+
+            HydroLive.sounderConnection(previous, false)
+            HydroLive.frame(previous, "stale frame", start + 100, 2_100_000_000)
+            assertTrue(HydroLive.sounderConnected)
+            assertEquals(dbt, HydroLive.depth?.raw)
+
+            HydroLive.sounderConnection(replacement, false)
+            HydroLive.frame(replacement, dbt, start + 200, 2_200_000_000)
+            assertNull(HydroLive.depth)
+        } finally {
+            HydroLive.sounderConnection(replacement, false)
+        }
+    }
+
     private fun withChecksum(sentence: String): String {
         val body = sentence.substringAfter('$').substringBefore('*')
         return "\$$body*%02X".format(body.fold(0) { value, c -> value xor c.code })

@@ -9,6 +9,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
@@ -17,6 +18,7 @@ import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** A single USB serial owner; no terminal app or phone location is involved. */
@@ -32,6 +34,9 @@ class CeeLineUsbService : Service() {
             }
         }
     }
+    private val owner = "cee-usb-${UUID.randomUUID()}"
+    private val lifecycle = Any()
+    private var latestStartId = 0
     private val active = AtomicBoolean(false)
     private val policy = UsbConnectionPolicy()
     private val manager by lazy { getSystemService(USB_SERVICE) as UsbManager }
@@ -44,11 +49,16 @@ class CeeLineUsbService : Service() {
     @Volatile private var attachedDevice: Int? = null
     private var worker: Thread? = null
 
-    private fun report(state: String, detail: String) {
-        prefs.edit().putString("state", state).putString("detail", detail).apply()
+    private fun updateStatus(update: SharedPreferences.Editor.() -> Unit) {
+        synchronized(HydroLive) {
+            if (HydroLive.ownsSounder(owner)) prefs.edit().apply(update).apply()
+        }
     }
+
+    private fun report(state: String, detail: String) =
+        updateStatus { putString("state", state).putString("detail", detail) }
     private fun invalidate() {
-        HydroLive.sounderConnection(SOURCE, false)
+        HydroLive.sounderConnection(owner, false)
         synchronized(framer) { framer.reset() }
         session.close()
         port = null
@@ -101,21 +111,24 @@ class CeeLineUsbService : Service() {
             policy.select(if (intent?.hasExtra(EXTRA_DEVICE_ID) == true) intent.getIntExtra(EXTRA_DEVICE_ID, -1) else null)
         }
         pendingPermission = null
-        if (!active.compareAndSet(false, true)) {
-            invalidate()
-            return START_NOT_STICKY
+        synchronized(lifecycle) {
+            latestStartId = startId
+            if (!active.compareAndSet(false, true)) {
+                invalidate()
+                return START_NOT_STICKY
+            }
+            HydroLive.claimSounder(owner, CeeLineDbt.PROTOCOL)
+            worker = Thread({ acquire() }, "cee-line-usb").also { it.start() }
         }
-        HydroLive.claimSounder(SOURCE)
-        worker = Thread({ acquire() }, "cee-line-usb").also { it.start() }
         return START_NOT_STICKY
     }
     private fun acquire() {
         val buffer = ByteArray(1024)
         try {
-            while (active.get() && HydroLive.ownsSounder(SOURCE)) {
+            while (active.get() && HydroLive.ownsSounder(owner)) {
                 try {
                     val drivers = UsbSerialProber.getDefaultProber().findAllDrivers(manager)
-                    prefs.edit().putString("devices", drivers.joinToString(",") { it.device.deviceId.toString() }).apply()
+                    updateStatus { putString("devices", drivers.joinToString(",") { it.device.deviceId.toString() }) }
                     val id = synchronized(policy) { policy.choose(drivers.map { it.device.deviceId }) }
                     val driver = drivers.firstOrNull { it.device.deviceId == id }
                     if (driver == null) {
@@ -160,19 +173,24 @@ class CeeLineUsbService : Service() {
                         override fun close() = serial.close()
                     })
                     synchronized(framer) { framer.reset() }
-                    HydroLive.sounderConnection(SOURCE, true)
+                    HydroLive.sounderConnection(owner, true)
                     synchronized(policy) { policy.connected() }
                     report("connected", "CEE-LINE USB • 9600 8N1 • waiting for valid DBT")
-                    while (active.get() && HydroLive.ownsSounder(SOURCE) && port === serial) {
+                    while (active.get() && HydroLive.ownsSounder(owner) && port === serial) {
                         val count = session.read(buffer, 500)
-                        if (count <= 0) continue
+                        if (count <= 0 || !active.get() || port !== serial || !HydroLive.ownsSounder(owner)) continue
                         val utc = System.currentTimeMillis()
                         val nanos = SystemClock.elapsedRealtimeNanos()
-                        HydroLive.rawDepth(SOURCE, buffer, count)
-                        val frames = synchronized(framer) { framer.accept(buffer, count) }
-                        frames.forEach { HydroLive.frame(SOURCE, it, utc, nanos) }
-                        prefs.edit().putString("preview", frames.lastOrNull()?.take(160).orEmpty())
-                            .putLong("last_bytes_ms", utc).apply()
+                        synchronized(HydroLive) {
+                            if (active.get() && port === serial && HydroLive.ownsSounder(owner) && HydroLive.sounderConnected) {
+                                HydroLive.rawDepth(owner, buffer, count)
+                                val frames = synchronized(framer) { framer.accept(buffer, count) }
+                                frames.forEach { HydroLive.frame(owner, it, utc, nanos) }
+                                updateStatus {
+                                    putString("preview", frames.lastOrNull()?.take(160).orEmpty()).putLong("last_bytes_ms", utc)
+                                }
+                            }
+                        }
                     }
                 } catch (_: InterruptedException) {
                     break
@@ -188,8 +206,10 @@ class CeeLineUsbService : Service() {
             }
         } finally {
             invalidate()
-            active.set(false)
-            stopSelf()
+            synchronized(lifecycle) {
+                active.set(false)
+                if (HydroLive.ownsSounder(owner)) stopSelfResult(latestStartId)
+            }
         }
     }
     override fun onDestroy() {

@@ -66,6 +66,7 @@ object HydroLive {
             fields[0], sigma?.raw.orEmpty(), sigma?.receivedUtcMillis))
     }
     private var sounderOwner = ""
+    private var sounderProtocol = HydroLiteDecoder.PROTOCOL
     private var recordingProtocol = HydroLiteDecoder.PROTOCOL
     private val recentMapPoints = java.util.ArrayDeque<Pair<Double, Double>>()
 
@@ -74,9 +75,12 @@ object HydroLive {
     private fun protocolForSource(source: String) =
         if (source == CeeLineUsbService.SOURCE) CeeLineDbt.PROTOCOL else HydroLiteDecoder.PROTOCOL
     @Synchronized fun ownsSounder(source: String) = source == sounderOwner
-    @Synchronized fun claimSounder(source: String) {
-        if (recording && protocolForSource(source) != recordingProtocol) return
-        sounderOwner = source; sounderConnected = false; depth = null
+    @Synchronized fun claimSounder(source: String, protocol: String = protocolForSource(source)) {
+        if (recording && protocol != recordingProtocol) return
+        sounderOwner = source
+        sounderProtocol = protocol
+        sounderConnected = false
+        depth = null
     }
     @Synchronized fun sounderConnection(source: String, connected: Boolean) {
         if (source != sounderOwner) return
@@ -84,12 +88,12 @@ object HydroLive {
         depth = null
     }
     @Synchronized fun rawDepth(source: String, bytes: ByteArray, count: Int) {
-        if (source != sounderOwner || !recording) return
+        if (source != sounderOwner || !sounderConnected || !recording) return
         try { rawDepthOutput?.apply { write(bytes, 0, count); flush() } } catch (e: Exception) { fail(e) }
     }
     @Synchronized fun frame(source: String, frame: String, utc: Long, nanos: Long) {
-        if (source != sounderOwner) return
-        val sample = if (protocolForSource(source) == CeeLineDbt.PROTOCOL) {
+        if (source != sounderOwner || !sounderConnected) return
+        val sample = if (sounderProtocol == CeeLineDbt.PROTOCOL) {
             CeeLineDbt.decode(frame, utc, nanos)
         } else HydroLiteDecoder.decode(frame, utc, nanos)
         depth = sample
