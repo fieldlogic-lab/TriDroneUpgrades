@@ -33,7 +33,7 @@ object AppUpdater {
             setPadding(24, 22, 24, 22)
         }
         AlertDialog.Builder(activity).setTitle("TriDrone app updates")
-            .setMessage("The official development update feed is preconfigured. Tap Check now to download the newest signed build.")
+            .setMessage("This feed contains published development builds. Draft PR test APKs must be installed separately from their GitHub Actions artifacts. Tap Check now to compare the published build with this installation.")
             .setView(input)
             .setNegativeButton("Cancel", null)
             .setNeutralButton("Save") { _, _ ->
@@ -166,3 +166,4 @@ object AppUpdater {
         }.start()
     }
 }
+

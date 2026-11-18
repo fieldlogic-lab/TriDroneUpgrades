@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- connectedDevice foreground-service prerequisite; no network configuration is changed. -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
+    <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
@@ -18,6 +21,7 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <service android:name=".CeeLineUsbService" android:exported="false" android:foregroundServiceType="connectedDevice"/>
         <service android:name=".SounderDiagnosticService" android:exported="false" android:foregroundServiceType="connectedDevice"/>
         <service android:name=".WifiRtkService" android:exported="false" android:foregroundServiceType="connectedDevice"/>
         <service android:name=".RtkService" android:exported="false" android:foregroundServiceType="connectedDevice"/>
