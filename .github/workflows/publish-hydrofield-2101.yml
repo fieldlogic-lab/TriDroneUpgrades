@@ -1,0 +1,41 @@
+name: Publish verified HydroField 2101
+on:
+  push:
+    branches: [release/publish-hydrofield-2101]
+permissions:
+  contents: write
+concurrency:
+  group: tridrone-dev-latest
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update the existing TriDrone release feed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          repo="$GITHUB_REPOSITORY"
+          feed="https://github.com/$repo/releases/download/dev-latest"
+          apk=hydrofield-2101.apk
+          hash=1ca7277069dcbf8fd4885f05ce0a48f106145da17cf7a8a3a0a458935ccb7802
+          curl -fsSL --retry 3 "$feed/latest.json" > previous.json
+          current=$(jq -er '.versionCode' previous.json)
+          if [ "$current" -eq 2101 ]; then
+            jq -e --arg hash "$hash" --arg url "$feed/$apk" '.sha256 == $hash and .apkUrl == $url' previous.json
+            curl -fsSL --retry 3 "$feed/$apk" -o checked.apk
+            echo "$hash  checked.apk" | sha256sum -c
+            exit 0
+          fi
+          test "$current" -eq 1084
+          curl -fsSL --retry 3 "https://raw.githubusercontent.com/$repo/487ae2c71198c753077910061256cfae12fe2cb4/HydroField-2101.apk" -o "$apk"
+          echo "$hash  $apk" | sha256sum -c
+          cp previous.json latest-1084.json
+          gh release upload dev-latest "$apk" latest-1084.json --repo "$repo" --clobber
+          curl -fsSL --retry 5 --retry-all-errors "$feed/$apk" -o checked.apk
+          echo "$hash  checked.apk" | sha256sum -c
+          jq -n --arg url "$feed/$apk" --arg hash "$hash" '{versionCode:2101, apkUrl:$url, sha256:$hash}' > latest.json
+          gh release upload dev-latest latest.json --repo "$repo" --clobber
