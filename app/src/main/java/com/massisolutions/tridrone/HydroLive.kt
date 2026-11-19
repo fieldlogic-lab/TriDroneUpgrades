@@ -28,11 +28,19 @@ object HydroLive {
     @Volatile var error = ""; private set
 
     fun equipmentFile(c: Context, protocol: String = HydroLiteDecoder.PROTOCOL): File =
-        File(c.filesDir, if (protocol == CeeLineDbt.PROTOCOL) "cee-line-equipment.properties" else "equipment.properties")
+        EquipmentProfile.forProtocol(protocol).file(c)
 
-    fun selectedProtocol(c: Context): String = protocolForSource(
-        c.getSharedPreferences("sounder_profile", Context.MODE_PRIVATE).getString("profile", "").orEmpty()
-    )
+    fun selectedProtocol(c: Context): String = EquipmentProfile.active(c).protocol
+
+    @Synchronized fun selectProfile(c: Context, profile: EquipmentProfile): Boolean {
+        if (recording) return false
+        if (profile != EquipmentProfile.active(c)) {
+            EquipmentProfile.select(c, profile)
+            claimSounder(profile.source)
+        }
+        return true
+    }
+
     @Synchronized fun ownsGnss(source: String) = gnss.owns(source)
     @Synchronized fun claimGnss(source: String) {
         gnss.claim(source); precision.reset()
@@ -64,13 +72,26 @@ object HydroLive {
         gnss.accept(HydroGnss(sentence, utc, nanos, observation.latitude, observation.longitude,
             observation.fixQuality ?: 0, observation.altitudeMeters, sigma?.horizontalMeters, sigma?.verticalMeters,
             fields[0], sigma?.raw.orEmpty(), sigma?.receivedUtcMillis))
+        if ((recording || mapProjectId == null) && gnss.connected &&
+            (observation.fixQuality ?: 0) in 1..5) {
+            mapTrack.add(observation.latitude to observation.longitude)
+        }
     }
     private var sounderOwner = ""
     private var sounderProtocol = HydroLiteDecoder.PROTOCOL
     private var recordingProtocol = HydroLiteDecoder.PROTOCOL
-    private val recentMapPoints = java.util.ArrayDeque<Pair<Double, Double>>()
+    private var mapProjectId: String? = null
+    private val mapTrack = SurveyMapTrace()
+    private val mapSoundings = SurveyMapTrace()
 
-    @Synchronized fun mapPoints(): List<Pair<Double, Double>> = recentMapPoints.toList()
+    @Synchronized fun mapSnapshot(nowNanos: Long, projectId: String?): LiveMapSnapshot {
+        val current = gnss.latest?.takeIf {
+            gnss.connected && it.quality in 1..5 && nowNanos - it.elapsedNanos in 0..5_000_000_000L
+        }?.let { it.latitude to it.longitude }
+        return if (mapProjectId == null || mapProjectId == projectId) {
+            LiveMapSnapshot(current, mapTrack.snapshot(), mapSoundings.snapshot())
+        } else LiveMapSnapshot(current, emptyList(), emptyList())
+    }
 
     private fun protocolForSource(source: String) =
         if (source == CeeLineUsbService.SOURCE) CeeLineDbt.PROTOCOL else HydroLiteDecoder.PROTOCOL
@@ -106,8 +127,7 @@ object HydroLive {
             eventCount++
             if (sample.valid && paired != null) {
                 validCount++
-                if (recentMapPoints.size >= 2000) recentMapPoints.removeFirst()
-                recentMapPoints.addLast(paired.latitude to paired.longitude)
+                mapSoundings.add(paired.latitude to paired.longitude)
             }
             persistStatus()
         } catch (e: Exception) { fail(e) }
@@ -116,7 +136,7 @@ object HydroLive {
         val sample = depth ?: return null
         if (sample.protocol != CeeLineDbt.PROTOCOL ||
             sample.status(sounderConnected, SystemClock.elapsedRealtimeNanos()) != "VALID_PROVISIONAL") return null
-        val geometry = if (recording) settings else EquipmentSettings.load(equipmentFile(c, CeeLineDbt.PROTOCOL))
+        val geometry = if (recording) settings else EquipmentProfile.BOAT.settings(c)
         return WaterDepth.meters(sample.meters, geometry.waterlineOffsetUsft?.div(SurveyUnits.US_FEET_PER_METER))
     }
 
@@ -133,7 +153,8 @@ object HydroLive {
             "A fresh valid provisional depth is required" }
         check(current.protocol == expectedProtocol) { "Connect the selected sounder before GO" }
         val isCee = current.protocol == CeeLineDbt.PROTOCOL
-        settings = EquipmentSettings.load(equipmentFile(c, current.protocol))
+        val profile = EquipmentProfile.forProtocol(current.protocol)
+        settings = profile.settings(c)
         check(!isCee || settings.ceeValid) { "Confirm both vertical measurements before GO" }
         check(gnss.paired(current, settings.pairToleranceMillis) != null) {
             if (isCee) "A fresh paired external RTK FIX/FLOAT epoch is required" else "A fresh paired external GNSS epoch is required"
@@ -149,6 +170,11 @@ object HydroLive {
         val metadata = surveyConfig.json().apply {
             put("started_utc_ms", startedUtc); put("protocol", current.protocol)
             put("schema_version", if (isCee) 2 else 1)
+            put("equipment_profile", profile.source)
+            put("equipment_profile_name", profile.name(settings))
+            put("sounder_reference", settings.sounderReference ?: JSONObject.NULL)
+            put("sounder_to_waterline_usft", settings.waterlineOffsetUsft ?: JSONObject.NULL)
+            put("depth_correction_status", if (isCee) "EXISTING_DBT_WATERLINE_FORMULA" else "UNVERIFIED_AS_REPORTED")
             if (isCee) {
                 put("transducer_below_waterline_usft", settings.waterlineOffsetUsft ?: JSONObject.NULL)
                 put("water_depth_formula", "raw_DBT + positive_submerged_transducer_offset")
@@ -179,7 +205,10 @@ object HydroLive {
             // Preserve the epoch used to open the recording, even if no further GNSS arrives.
             gnss.latest?.let { rawGnssWriter!!.apply { write("${it.receivedUtcMillis},${it.elapsedNanos},${HydroCsv.cell(it.raw)}\n"); flush() } }
             recordingProtocol = current.protocol
-            recentMapPoints.clear()
+            mapProjectId = projectId
+            mapTrack.clear()
+            gnss.latest?.let { mapTrack.add(it.latitude to it.longitude) }
+            mapSoundings.clear()
             recording = true
             persistStatus()
         } catch (e: Exception) { fail(e); throw e }

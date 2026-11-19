@@ -68,12 +68,18 @@ class FieldUiSmokeTest {
                 }
             }
             for (id in listOf(R.id.survey_gnss_status, R.id.survey_sounder_status, R.id.survey_start_stop)) {
-                onView(withId(id)).perform(scrollTo()).check { view, error ->
+                val status = onView(withId(id))
+                if (id != R.id.survey_start_stop) status.perform(scrollTo())
+                status.check { view, error ->
                     if (error != null) throw error
                     assertTrue("Outdoor controls must retain a 48dp minimum touch height", view.height >= 48 * view.resources.displayMetrics.density)
                 }
             }
             onView(withId(R.id.survey_start_stop)).check(matches(isDisplayed()))
+            onView(withId(R.id.survey_map)).check(matches(isDisplayed())).perform(click())
+            onView(withText("Boat track & sounding locations")).inRoot(isDialog()).check(matches(isDisplayed()))
+            onView(withText("Close")).inRoot(isDialog()).perform(click())
+            onView(withId(R.id.survey_map)).check(matches(isDisplayed()))
             onView(withId(R.id.survey_gnss_status)).perform(scrollTo(), click())
             onView(withText("Connections & diagnostics")).check(matches(isDisplayed()))
             screenshot("equipment-disconnected")
@@ -221,8 +227,12 @@ class FieldUiSmokeTest {
                         activity.findViewById<android.view.View>(R.id.survey_start_stop).performClick()
                         assertTrue("Go must open a collection", HydroLive.recording)
                     }
+                    val other = if (cee) EquipmentProfile.TRIDRONE else EquipmentProfile.BOAT
+                    assertFalse(HydroLive.selectProfile(context, other))
+                    assertEquals(cee, EquipmentProfile.active(context) == EquipmentProfile.BOAT)
                     repeat(count) { feed(sounder) }
-                    onView(withId(R.id.survey_start_stop)).perform(scrollTo(), click())
+                    onView(withId(R.id.survey_map)).check(matches(isDisplayed()))
+                    onView(withId(R.id.survey_start_stop)).perform(click())
                     assertFalse(HydroLive.recording)
                 }
                 scenario.recreate()
@@ -259,8 +269,8 @@ class FieldUiSmokeTest {
     private fun chooseSounder(cee: Boolean) {
         onView(withId(R.id.tab_survey)).perform(click())
         onView(withId(R.id.survey_sounder_status)).perform(scrollTo(), click())
-        onView(withText(startsWith("Sounder profile •"))).perform(scrollTo(), click())
-        onView(withText(if (cee) "CEE-LINE USB • NMEA DBT" else "HydroLite Plus (existing provisional decoder)"))
+        onView(withText(startsWith("Equipment profile •"))).perform(scrollTo(), click())
+        onView(withText(endsWith(if (cee) "•  CEE-LINE USB" else "•  HydroLite Plus")))
             .inRoot(isDialog()).perform(click())
     }
 

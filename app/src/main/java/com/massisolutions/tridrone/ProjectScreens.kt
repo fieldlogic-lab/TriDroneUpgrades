@@ -214,7 +214,7 @@ internal class ProjectScreens(
             activity.startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = if (csv) "text/csv" else "application/zip"
-                putExtra(Intent.EXTRA_TITLE, "TriDrone-$prefix-$id-$stamp.$extension")
+                putExtra(Intent.EXTRA_TITLE, "HydroField-$prefix-$id-$stamp.$extension")
             }, EXPORT_REQUEST)
         } catch (error: Exception) {
             pendingId = null

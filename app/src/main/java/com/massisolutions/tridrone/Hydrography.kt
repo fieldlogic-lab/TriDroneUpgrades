@@ -42,7 +42,8 @@ object HydroLiteDecoder {
 
 data class EquipmentSettings(val offsetUsft: Double? = null, val antennaReference: String = "UNSET",
     val confirmed: Boolean = false, val pairToleranceMillis: Long = 1000,
-    val waterlineOffsetUsft: Double? = null) {
+    val waterlineOffsetUsft: Double? = null, val name: String? = null,
+    val sounderReference: String? = null) {
     val valid get() = offsetUsft != null && offsetUsft.isFinite() && offsetUsft >= 0 &&
         antennaReference in REFERENCES && confirmed && pairToleranceMillis in 1..5000
     val ceeValid get() = valid && waterlineOffsetUsft != null && waterlineOffsetUsft.isFinite() && waterlineOffsetUsft >= 0
@@ -52,6 +53,8 @@ data class EquipmentSettings(val offsetUsft: Double? = null, val antennaReferenc
             setProperty("waterline_offset_usft", waterlineOffsetUsft?.toString().orEmpty())
             setProperty("antenna_reference", antennaReference)
             setProperty("confirmed", confirmed.toString())
+            setProperty("profile_name", name.orEmpty())
+            setProperty("sounder_reference", sounderReference.orEmpty())
             setProperty("pair_tolerance_ms", pairToleranceMillis.toString())
         }
         file.parentFile?.mkdirs()
@@ -61,13 +64,20 @@ data class EquipmentSettings(val offsetUsft: Double? = null, val antennaReferenc
     }
     companion object {
         val REFERENCES = listOf("ANTENNA_REFERENCE_POINT", "RECEIVER_OUTPUT_REFERENCE")
-        fun load(file: File): EquipmentSettings = try {
-            val p = Properties().apply { file.inputStream().use { load(it) } }
-            EquipmentSettings(p.getProperty("offset_usft")?.toDoubleOrNull(),
-                p.getProperty("antenna_reference", "UNSET"), p.getProperty("confirmed") == "true",
-                p.getProperty("pair_tolerance_ms")?.toLongOrNull() ?: 1000,
-                p.getProperty("waterline_offset_usft")?.toDoubleOrNull())
-        } catch (_: Exception) { EquipmentSettings() }
+        fun load(file: File, initial: EquipmentSettings = EquipmentSettings()): EquipmentSettings {
+            if (!file.exists()) return initial
+            return try {
+                val p = Properties().apply { file.inputStream().use { load(it) } }
+                EquipmentSettings(p.getProperty("offset_usft")?.toDoubleOrNull(),
+                    p.getProperty("antenna_reference", "UNSET"), p.getProperty("confirmed") == "true",
+                    p.getProperty("pair_tolerance_ms")?.toLongOrNull() ?: 1000,
+                    p.getProperty("waterline_offset_usft")?.toDoubleOrNull(),
+                    p.getProperty("profile_name")?.takeIf(String::isNotBlank),
+                    p.getProperty("sounder_reference")?.takeIf(String::isNotBlank))
+            } catch (_: Exception) {
+                EquipmentSettings()
+            }
+        }
     }
 }
 

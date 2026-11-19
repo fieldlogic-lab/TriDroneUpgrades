@@ -34,7 +34,7 @@ class SurveyService : Service(), LocationListener {
         mgr.createNotificationChannel(NotificationChannel(channel, "Survey recording", NotificationManager.IMPORTANCE_LOW))
         val notice = Notification.Builder(this, channel)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentTitle("TriDrone recording GNSS")
+            .setContentTitle("HydroField recording GNSS")
             .setContentText("Saving location data locally")
             .setOngoing(true)
             .build()

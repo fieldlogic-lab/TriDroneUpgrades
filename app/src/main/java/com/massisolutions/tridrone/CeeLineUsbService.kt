@@ -98,7 +98,7 @@ class CeeLineUsbService : Service() {
         notifications.createNotificationChannel(NotificationChannel("cee_usb", "CEE-LINE USB", NotificationManager.IMPORTANCE_LOW))
         startForeground(1005, Notification.Builder(this, "cee_usb")
             .setSmallIcon(android.R.drawable.ic_menu_info_details)
-            .setContentTitle("TriDrone CEE-LINE USB")
+            .setContentTitle("HydroField CEE-LINE USB")
             .setContentText("Receiving sounder NMEA; reconnecting when attached")
             .setOngoing(true).build())
     }
@@ -144,7 +144,7 @@ class CeeLineUsbService : Service() {
                         val allowed = synchronized(policy) { policy.mayRequestPermission(device.deviceId) }
                         if (pendingPermission == null && allowed) {
                             pendingPermission = device.deviceId
-                            report("permission_pending", "Allow TriDrone to access the USB adapter")
+                            report("permission_pending", "Allow HydroField to access the USB adapter")
                             val permissionIntent = Intent(PERMISSION).setPackage(packageName)
                             val pending = PendingIntent.getBroadcast(this, device.deviceId, permissionIntent,
                                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)

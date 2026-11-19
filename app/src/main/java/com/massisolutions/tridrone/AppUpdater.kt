@@ -32,7 +32,7 @@ object AppUpdater {
             setText(current)
             setPadding(24, 22, 24, 22)
         }
-        AlertDialog.Builder(activity).setTitle("TriDrone app updates")
+        AlertDialog.Builder(activity).setTitle("HydroField app updates")
             .setMessage("This feed contains published development builds. Draft PR test APKs must be installed separately from their GitHub Actions artifacts. Tap Check now to compare the published build with this installation.")
             .setView(input)
             .setNegativeButton("Cancel", null)
@@ -104,7 +104,7 @@ object AppUpdater {
                         AlertDialog.Builder(activity).setTitle("Up to date")
                             .setMessage("Installed build: $installed. Latest published build: $version.")
                             .setPositiveButton("OK", null).show()
-                    } else AlertDialog.Builder(activity).setTitle("TriDrone update available")
+                    } else AlertDialog.Builder(activity).setTitle("HydroField update available")
                         .setMessage("Installed build $installed → build $version. Download and open Android installer?")
                         .setNegativeButton("Cancel", null)
                         .setPositiveButton("Download") { _, _ -> download(activity, apkUrl, sha256) }
@@ -147,7 +147,7 @@ object AppUpdater {
                 activity.runOnUiThread {
                     if (Build.VERSION.SDK_INT >= 26 && !activity.packageManager.canRequestPackageInstalls()) {
                         AlertDialog.Builder(activity).setTitle("Allow app updates")
-                            .setMessage("Android must allow TriDrone to install updates from this source. After enabling it, tap Check for Updates again.")
+                            .setMessage("Android must allow HydroField to install updates from this source. After enabling it, tap Check for Updates again.")
                             .setPositiveButton("Settings") { _, _ ->
                                 activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                                     Uri.parse("package:${activity.packageName}")))

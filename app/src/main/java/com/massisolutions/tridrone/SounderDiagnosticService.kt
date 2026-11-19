@@ -35,7 +35,7 @@ class SounderDiagnosticService : Service() {
         manager.createNotificationChannel(NotificationChannel("sounder_diagnostics", "Sounder diagnostics", NotificationManager.IMPORTANCE_LOW))
         startForeground(1004, Notification.Builder(this, "sounder_diagnostics")
             .setSmallIcon(android.R.drawable.ic_menu_info_details)
-            .setContentTitle("TriDrone sounder diagnostics")
+            .setContentTitle("HydroField sounder diagnostics")
             .setContentText("Recording raw Bluetooth diagnostic data")
             .setOngoing(true).build())
     }
