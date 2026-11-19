@@ -12,10 +12,8 @@ android {
         applicationId = "com.massisolutions.tridrone"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2000 + (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1)
-        val testRun = System.getenv("GITHUB_RUN_NUMBER") ?: "local"
-        val sourceCommit = System.getenv("GITHUB_SHA")?.take(7) ?: "uncommitted"
-        versionName = "0.4.0-test.$testRun.$sourceCommit"
+        versionCode = 2101
+        versionName = "0.4.0 (2101)"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
