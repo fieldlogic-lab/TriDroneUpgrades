@@ -37,7 +37,7 @@ class RtkService : Service() {
         manager.createNotificationChannel(NotificationChannel(channel, "RTK NMEA streaming", NotificationManager.IMPORTANCE_LOW))
         val notification = Notification.Builder(this, channel)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentTitle("TriDrone RTK receiver")
+            .setContentTitle("HydroField RTK receiver")
             .setContentText("Bluetooth NMEA acquisition")
             .setOngoing(true).build()
         startForeground(1002, notification)
@@ -197,7 +197,7 @@ class WifiRtkService : Service() {
         notifications.createNotificationChannel(NotificationChannel("tridrone_wifi_rtk", "Wi-Fi GNSS streaming", NotificationManager.IMPORTANCE_LOW))
         startForeground(1003, Notification.Builder(this, "tridrone_wifi_rtk")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentTitle("TriDrone Wi-Fi GNSS")
+            .setContentTitle("HydroField Wi-Fi GNSS")
             .setContentText("Receiving RTK NMEA over TCP")
             .setOngoing(true).build())
     }

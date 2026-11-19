@@ -299,7 +299,7 @@ class ProjectStore internal constructor(
                 }
                 if (rejected > 0) warnings.add("${file.name}: $rejected records remain in the original file.")
             } catch (_: SQLiteFullException) {
-                warnings.add("${file.name}: Device storage is full. Original files were retained. Free space and reopen TriDrone to retry.")
+                warnings.add("${file.name}: Device storage is full. Original files were retained. Free space and reopen HydroField to retry.")
                 break
             } catch (exception: java.io.IOException) {
                 warnings.add("${file.name}: ${exception.message ?: "Cannot read original survey"}")

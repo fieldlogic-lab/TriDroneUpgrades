@@ -20,6 +20,11 @@ class MainActivity : Activity(), LocationListener {
     private lateinit var projectScreens: ProjectScreens
     private lateinit var projectButton: Button
     private lateinit var sounderProfileButton: Button
+    private lateinit var surveyProfileButton: Button
+    private lateinit var surveyMap: SurveyMapView
+    private lateinit var depthCorrection: TextView
+    private var displayedProfile: EquipmentProfile? = null
+    private var displayedGeometry = EquipmentSettings()
     private var activeProject: SurveyProject? = null
     private val modeController = SurveyModeController()
     private val demoMode get() = modeController.state.mode == SurveyModeController.Mode.DEMO
@@ -208,7 +213,7 @@ class MainActivity : Activity(), LocationListener {
             textSize = size
             setPadding(0, 10, 0, 10)
         }
-        layout.addView(label("TRIDRONE  |  HYDROGRAPHIC SURVEY", 23f).apply { setTypeface(null, Typeface.BOLD) })
+        layout.addView(label("HydroField Survey", 23f).apply { setTypeface(null, Typeface.BOLD) })
         layout.addView(label("GNSS acquisition  •  Offline  •  Field mode", 14f))
         gpsBar = label("GNSS STATUS • SEARCHING", 19f).apply { setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE); setBackgroundColor(Color.DKGRAY); setPadding(20,20,20,20) }
         gpsMetrics = label("Horizontal: —\nVertical: —", 17f)
@@ -324,7 +329,7 @@ class MainActivity : Activity(), LocationListener {
             textSize = 15f
             setOnClickListener { click() }
         }
-        wizard.addView(heading("TRIDRONE  /  HYDRO", 25f, cyan).apply { setTypeface(null, Typeface.BOLD) })
+        wizard.addView(heading("HydroField", 25f, cyan).apply { setTypeface(null, Typeface.BOLD) })
         wizard.addView(heading("FIELD CONSOLE   •   OFFLINE LOGGER", 12f, muted))
         wizard.addView(heading("Survey workspace", 21f).apply { setTypeface(null, Typeface.BOLD) })
         modeLabel = heading("LIVE SURVEY  •  REAL HARDWARE", 15f, cyan).apply { id = R.id.survey_mode }
@@ -351,8 +356,9 @@ class MainActivity : Activity(), LocationListener {
         gnssCard.addView(demoGnssActions)
         val sounderCard = section("02   DEPTH SOUNDER", "HydroLite Plus / CEE-LINE USB")
         setupSounder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        sounderProfileButton = action("Select sounder profile") { selectSounderProfile() }
+        sounderProfileButton = action("Equipment profile") { selectSounderProfile() }
         setupSounder.addView(sounderProfileButton)
+        setupSounder.addView(action("Edit equipment profile and offsets") { showEquipmentSettings() })
         setupSounder.addView(action("Connect / inspect selected sounder") {
             if (ceeLineSelected()) connectCeeLine() else showSounderDiagnostics()
         })
@@ -438,18 +444,20 @@ class MainActivity : Activity(), LocationListener {
         val navHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(navy) }
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(24, 20, 24, 12)
+            setPadding(dp(12), dp(5), dp(12), dp(4))
             setBackgroundColor(navy)
         }
-        top.addView(heading("TRIDRONE", 25f, Color.WHITE).apply { setTypeface(null, Typeface.BOLD) })
-        top.addView(heading("TEST BUILD ${installedBuild().second}", 12f, muted))
+        top.addView(heading(getString(R.string.app_name), 22f, Color.WHITE).apply {
+            setTypeface(null, Typeface.BOLD)
+            setPadding(8, 0, 8, 0)
+        })
         val tabBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setBackgroundColor(panel) }
         val pages = listOf("Survey", "Sessions", "Equipment", "Settings")
         val tabButtons = mutableListOf<Button>()
         val pageScroll = ScrollView(this).apply { isFillViewport = true }
         val pageHost = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(20, 20, 20, 28)
+            setPadding(dp(10), dp(6), dp(10), dp(6))
         }
         pageScroll.addView(pageHost)
         val surveyPage = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -457,12 +465,25 @@ class MainActivity : Activity(), LocationListener {
         val equipmentPage = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val settingsPage = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val destinations = listOf(surveyPage, sessionsPage, equipmentPage, settingsPage)
+        val surveyFooter = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), 0, dp(10), 0)
+        }
+        surveyMap = SurveyMapView(this).apply {
+            id = R.id.survey_map
+            contentDescription = "Offline boat track and sounding locations. Tap to expand."
+            isFocusable = true
+            setOnClickListener { showLiveRtkMap() }
+        }
         fun selectPage(index: Int) {
             pageHost.removeAllViews()
             val selected = destinations[index]
             (selected.parent as? android.view.ViewGroup)?.removeView(selected)
             pageHost.addView(selected)
             pageScroll.scrollTo(0, 0)
+            val surveyVisibility = if (index == 0) android.view.View.VISIBLE else android.view.View.GONE
+            surveyFooter.visibility = surveyVisibility
+            surveyMap.visibility = surveyVisibility
             tabButtons.forEachIndexed { i, button ->
                 button.setTextColor(if (i == index) cyan else muted)
                 button.setBackgroundColor(if (i == index) navy else panel)
@@ -485,26 +506,48 @@ class MainActivity : Activity(), LocationListener {
         }
         gnssStatusButton = action("GNSS • Disconnected") { selectPage(2) }.apply {
             id = R.id.survey_gnss_status
-            minHeight = dp(64); textSize = 18f; setTextColor(Color.WHITE)
+            minHeight = dp(48)
+            textSize = 14f
+            setTextColor(Color.WHITE)
         }
         sounderStatusButton = action("Sounder • Disconnected") { selectPage(2) }.apply {
             id = R.id.survey_sounder_status
-            minHeight = dp(64); textSize = 18f; setTextColor(Color.WHITE)
+            minHeight = dp(48)
+            textSize = 14f
+            setTextColor(Color.WHITE)
         }
-        surveyPage.addView(gnssStatusButton)
-        surveyPage.addView(sounderStatusButton)
+        val statusRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(gnssStatusButton, LinearLayout.LayoutParams(0, -1, 1f).apply { marginEnd = dp(4) })
+            addView(sounderStatusButton, LinearLayout.LayoutParams(0, -1, 1f))
+        }
+        surveyPage.addView(statusRow)
         (gpsMetrics.parent as? android.view.ViewGroup)?.removeView(gpsMetrics)
         gpsMetrics.id = R.id.survey_precision
         gpsMetrics.setTextColor(Color.WHITE)
+        gpsMetrics.setPadding(dp(8), dp(5), dp(8), dp(5))
         surveyPage.addView(gpsMetrics)
-        liveDepth = heading("WATER DEPTH  — US survey ft", 27f).apply { id = R.id.survey_depth }
-        surveyPage.addView(liveDepth)
-        liveRecording = heading("Stopped • 00:00:00\n0 valid soundings", 17f)
+        liveDepth = heading("WATER DEPTH  —", 26f).apply {
+            id = R.id.survey_depth
+            setTypeface(null, Typeface.BOLD)
+            setBackgroundColor(panel)
+            setPadding(dp(8), dp(6), dp(8), dp(2))
+        }
+        surveyPage.addView(liveDepth, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
+        depthCorrection = heading("", 12f, muted).apply {
+            setBackgroundColor(panel)
+            setPadding(dp(8), 0, dp(8), dp(5))
+        }
+        surveyPage.addView(depthCorrection)
+        liveRecording = heading("Stopped • 00:00:00", 16f).apply { setPadding(dp(8), dp(5), dp(8), dp(5)) }
         surveyPage.addView(liveRecording)
-        surveyPage.addView(action("Boat track & soundings map") { showLiveRtkMap() })
+        surveyProfileButton = action("Equipment profile") { selectPage(2) }
+        surveyPage.addView(surveyProfileButton)
         (setupNext.parent as? android.view.ViewGroup)?.removeView(setupNext)
         surveyPage.addView(projectButton)
-        surveyPage.addView(setupNext)
+        setupNext.minHeight = dp(52)
+        setupNext.minimumHeight = dp(52)
+        surveyFooter.addView(setupNext)
         (modeLabel.parent as? android.view.ViewGroup)?.removeView(modeLabel)
         surveyPage.addView(modeLabel)
         (demoStatus.parent as? android.view.ViewGroup)?.removeView(demoStatus)
@@ -533,14 +576,16 @@ class MainActivity : Activity(), LocationListener {
         settingsPage.addView(heading("SETTINGS", 12f, cyan))
         settingsPage.addView(heading("Preferences & tools", 22f))
         val build = installedBuild()
-        settingsPage.addView(heading("Installed test build ${build.second}\n${build.first}", 14f, muted))
+        settingsPage.addView(heading("Installed build ${build.second}\n${build.first}", 14f, muted))
         (toolsCard.parent as? android.view.ViewGroup)?.removeView(toolsCard)
         settingsPage.addView(toolsCard)
         (testCard.parent as? android.view.ViewGroup)?.removeView(testCard)
         settingsPage.addView(testCard)
         navHost.addView(top)
         navHost.addView(tabBar)
-        navHost.addView(pageScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        navHost.addView(pageScroll, LinearLayout.LayoutParams(-1, 0, 2f))
+        navHost.addView(surveyFooter, LinearLayout.LayoutParams(-1, -2))
+        navHost.addView(surveyMap, LinearLayout.LayoutParams(-1, 0, 1f))
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(navHost) { view, insets ->
             val safe = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() or
                 androidx.core.view.WindowInsetsCompat.Type.displayCutout())
@@ -575,8 +620,11 @@ class MainActivity : Activity(), LocationListener {
     }
     private fun updateGnssPreview() {
         val r = getSharedPreferences("rtk_status", MODE_PRIVATE)
-        val age = System.currentTimeMillis() - r.getLong("last_fix_ms", 0L)
-        val fresh = r.getString("state", "") == "connected" && age in 0..5000
+        val now = System.currentTimeMillis()
+        val fixTime = r.getLong("last_fix_ms", 0L)
+        val age = now - fixTime
+        val fixLimit = if (ceeLineSelected()) 3000L else 5000L
+        val fresh = r.getString("state", "") == "connected" && age in 0..fixLimit
         val quality = if (fresh) r.getString("quality", "") else ""
         val state = when {
             quality == "4" -> "RTK FIX"
@@ -592,18 +640,23 @@ class MainActivity : Activity(), LocationListener {
             "RTK FLOAT", "AUTONOMOUS", "DGPS", "NO VALID FIX" -> Color.rgb(172, 109, 19)
             else -> Color.rgb(124, 56, 56)
         })
-        val gstFresh = fresh && (System.currentTimeMillis() - r.getLong("gst_received_ms", 0L)) in 0..5000
-        val hSigma = if (gstFresh) r.getString("h_sigma_m", null)?.toDoubleOrNull() else null
-        val vSigma = if (gstFresh) r.getString("v_sigma_m", null)?.toDoubleOrNull() else null
-        val h = if (hSigma != null) String.format(Locale.US, "%.3f US survey ft", SurveyUnits.feet(hSigma))
-            else if (fresh) "Unavailable"
-            else "Unavailable"
-        val v = if (vSigma != null) String.format(Locale.US, "%.3f US survey ft", SurveyUnits.feet(vSigma))
-            else if (fresh) "Unavailable"
-            else "Unavailable"
-        gpsMetrics.text = if (demoMode) "DEMO • No live precision displayed" else
-            "Horizontal: $h\nVertical: $v  •  receiver 1σ"
-
+        val gstTime = r.getLong("gst_received_ms", 0L)
+        val indicator = receiverPrecision(
+            connected = r.getString("state", "") == "connected",
+            fixAge = age.takeIf { fixTime > 0 },
+            gstAge = (now - gstTime).takeIf { gstTime > 0 },
+            fixQuality = quality?.toIntOrNull(),
+            horizontalMeters = r.getString("h_sigma_m", null)?.toDoubleOrNull(),
+            verticalMeters = r.getString("v_sigma_m", null)?.toDoubleOrNull(),
+            fixLimit = fixLimit
+        )
+        gpsMetrics.text = if (demoMode) "DEMO • No live precision displayed" else indicator.text
+        gpsMetrics.setBackgroundColor(when {
+            demoMode -> Color.rgb(82, 68, 40)
+            indicator.state == PrecisionState.VALID -> Color.rgb(15, 97, 64)
+            indicator.state == PrecisionState.DEGRADED || indicator.state == PrecisionState.STALE -> Color.rgb(111, 74, 27)
+            else -> Color.rgb(49, 62, 80)
+        })
     }
     private fun startSimulation() {
         if (simulationActive) return
@@ -644,17 +697,25 @@ class MainActivity : Activity(), LocationListener {
     private fun ceeLineSelected() = HydroLive.selectedProtocol(this) == CeeLineDbt.PROTOCOL
 
     private fun selectSounderProfile() {
-        if (HydroLive.recording) {
-            Toast.makeText(this, "Stop recording before changing sounder profile", Toast.LENGTH_LONG).show()
+        if (HydroLive.recording || demoRecording) {
+            Toast.makeText(this, "Stop recording before changing equipment profiles", Toast.LENGTH_LONG).show()
             return
         }
-        android.app.AlertDialog.Builder(this).setTitle("Sounder profile")
-            .setSingleChoiceItems(arrayOf("HydroLite Plus (existing provisional decoder)", "CEE-LINE USB • NMEA DBT"), if (ceeLineSelected()) 1 else 0) { dialog, index ->
-                stopService(Intent(this, CeeLineUsbService::class.java))
-                stopService(Intent(this, SounderDiagnosticService::class.java))
-                val profile = if (index == 1) CeeLineUsbService.SOURCE else "HYDROLITE"
-                getSharedPreferences("sounder_profile", MODE_PRIVATE).edit().putString("profile", profile).apply()
-                HydroLive.claimSounder(profile)
+        val profiles = EquipmentProfile.entries
+        val active = EquipmentProfile.active(this)
+        val labels = profiles.map { profile ->
+            "${profile.name(profile.settings(this))}  •  ${profile.sounder}"
+        }
+        android.app.AlertDialog.Builder(this).setTitle("Equipment profile")
+            .setSingleChoiceItems(labels.toTypedArray(), profiles.indexOf(active)) { dialog, index ->
+                val selected = profiles[index]
+                if (demoRecording || !HydroLive.selectProfile(this, selected)) {
+                    Toast.makeText(this, "Stop recording before changing equipment profiles", Toast.LENGTH_LONG).show()
+                } else if (selected != active) {
+                    stopService(Intent(this, CeeLineUsbService::class.java))
+                    stopService(Intent(this, SounderDiagnosticService::class.java))
+                    displayedProfile = null
+                }
                 dialog.dismiss()
                 updateDisplay()
             }.setNegativeButton("Cancel", null).show()
@@ -679,54 +740,121 @@ class MainActivity : Activity(), LocationListener {
     }
 
     private fun showEquipmentSettings() {
-        val protocol = HydroLive.selectedProtocol(this)
-        val isCee = protocol == CeeLineDbt.PROTOCOL
-        val geometryFile = HydroLive.equipmentFile(this, protocol)
-        val current = EquipmentSettings.load(geometryFile)
-        val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 20, 28, 20) }
-        form.addView(TextView(this).apply { text = "Vertical separation: selected GNSS reference to transducer acoustic reference, positive DOWN, US survey feet. No antenna calibration is automatically added. Match the receiver height reference before calculating elevations." })
+        if (HydroLive.recording || demoRecording) {
+            Toast.makeText(this, "Stop recording before editing equipment profiles", Toast.LENGTH_LONG).show()
+            return
+        }
+        val profile = EquipmentProfile.active(this)
+        val current = profile.settings(this)
+        val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(12)) }
+        val name = EditText(this).apply {
+            hint = "Equipment profile name"
+            setSingleLine()
+            filters = arrayOf(android.text.InputFilter.LengthFilter(60))
+            setText(profile.name(current))
+        }
+        form.addView(name)
+        form.addView(TextView(this).apply {
+            text = "${profile.sounder} • GNSS reference to sounder reference, positive downward."
+        })
         val offset = EditText(this).apply {
-            hint = "GNSS reference to transducer (+ US survey ft)"
+            hint = if (profile == EquipmentProfile.BOAT) "GNSS reference to transducer (+ US survey ft)"
+                else "GNSS to sounder reference (+ US survey ft)"
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(current.offsetUsft?.toString().orEmpty())
         }
         form.addView(offset)
-        if (isCee) form.addView(TextView(this).apply { text = "Transducer below waterline: positive when submerged. Water Depth = raw DBT + this measurement. This is separate from the GNSS measurement above." })
-        val waterline = EditText(this).apply {
-            hint = "Transducer below waterline (+ US survey ft)"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(current.waterlineOffsetUsft?.toString().orEmpty())
+        if (profile == EquipmentProfile.TRIDRONE && !current.confirmed && current.offsetUsft == 6.75) {
+            form.addView(TextView(this).apply { text = "Starting measurement: 81 in (6.75 ft). Verify the reference points and distance." })
         }
-        if (isCee) form.addView(waterline)
         val reference = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
                 listOf("Select antenna reference", "Physical antenna reference point (ARP)", "Configured receiver output reference"))
             setSelection(EquipmentSettings.REFERENCES.indexOf(current.antennaReference) + 1)
         }
         form.addView(reference)
-        val confirmed = CheckBox(this).apply { text = "I verified offset and receiver height reference; no duplicate antenna correction"; isChecked = current.confirmed }
+        val sounderReference = EditText(this).apply {
+            hint = "Sounder reference point"
+            setSingleLine()
+            filters = arrayOf(android.text.InputFilter.LengthFilter(80))
+            setText(current.sounderReference.orEmpty())
+        }
+        form.addView(sounderReference)
+        form.addView(TextView(this).apply {
+            text = if (profile == EquipmentProfile.BOAT) {
+                "Sounder reference below water surface, positive when submerged. Water depth uses raw DBT plus this distance."
+            } else {
+                "Sounder reference to water surface, positive when submerged. HydroLite depth is displayed as reported. Its correction status is unverified."
+            }
+        })
+        val waterline = EditText(this).apply {
+            hint = if (profile == EquipmentProfile.BOAT) "Transducer below waterline (+ US survey ft)"
+                else "Sounder reference below waterline (+ US survey ft)"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(current.waterlineOffsetUsft?.toString().orEmpty())
+        }
+        form.addView(waterline)
+        val confirmed = CheckBox(this).apply {
+            text = if (profile == EquipmentProfile.BOAT) {
+                "I verified offset and receiver height reference; no duplicate antenna correction"
+            } else "I verified the distance and both reference points."
+            isChecked = current.confirmed
+        }
         form.addView(confirmed)
+        val resetConfirmation = object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                confirmed.isChecked = false
+            }
+            override fun afterTextChanged(s: android.text.Editable?) = Unit
+        }
+        listOf(offset, waterline, sounderReference).forEach { it.addTextChangedListener(resetConfirmation) }
+        var lastReferencePosition = reference.selectedItemPosition
+        reference.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                if (position != lastReferencePosition) confirmed.isChecked = false
+                lastReferencePosition = position
+            }
+        }
         form.addView(TextView(this).apply { text = "Pairing tolerance (milliseconds, 1–5000). Uses device receipt time; sensor latency remains unverified." })
         val tolerance = EditText(this).apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER; setText(current.pairToleranceMillis.toString()) }
         form.addView(tolerance)
-        val dialog = android.app.AlertDialog.Builder(this).setTitle("Equipment geometry")
+        val dialog = android.app.AlertDialog.Builder(this).setTitle("Equipment profile settings")
             .setView(ScrollView(this).apply { addView(form) }).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
         dialog.setOnShowListener {
             dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (HydroLive.recording || demoRecording || EquipmentProfile.active(this) != profile) {
+                    Toast.makeText(this, "Equipment changed or recording is active. Reopen settings after STOP.", Toast.LENGTH_LONG).show()
+                    dialog.dismiss()
+                    return@setOnClickListener
+                }
+                val profileName = name.text.toString().trim()
                 val distance = offset.text.toString().toDoubleOrNull()
                 val submerged = waterline.text.toString().toDoubleOrNull()
                 val ms = tolerance.text.toString().toLongOrNull()
-                if ((waterline.text.isNotBlank() && (submerged == null || !submerged.isFinite() || submerged < 0)) ||
-                    (isCee && (distance == null || submerged == null || !confirmed.isChecked)) ||
-                    (offset.text.isNotBlank() && (distance == null || !distance.isFinite() || distance < 0)) || ms == null || ms !in 1..5000 ||
-                    (confirmed.isChecked && (distance == null || reference.selectedItemPosition == 0))) {
-                    Toast.makeText(this, "Enter nonnegative measurements, verify the reference, and set a valid tolerance", Toast.LENGTH_LONG).show()
-                } else try {
-                    EquipmentSettings(distance, EquipmentSettings.REFERENCES.getOrNull(reference.selectedItemPosition - 1) ?: "UNSET", confirmed.isChecked, ms, submerged)
-                        .save(geometryFile)
-                    Toast.makeText(this, "Saved; active recording retains its original configuration", Toast.LENGTH_LONG).show()
+                val antennaReference = EquipmentSettings.REFERENCES.getOrNull(reference.selectedItemPosition - 1)
+                val sounderPoint = sounderReference.text.toString().trim().ifBlank { null }
+                val legacyConfirmation = current.confirmed && distance == current.offsetUsft &&
+                    antennaReference == current.antennaReference && submerged == current.waterlineOffsetUsft
+                if (profileName.isBlank() || ms == null || ms !in 1..5000 ||
+                    waterline.text.isNotBlank() && (submerged == null || !submerged.isFinite() || submerged < 0) ||
+                    offset.text.isNotBlank() && (distance == null || !distance.isFinite() || distance < 0) ||
+                    confirmed.isChecked && (distance == null || antennaReference == null ||
+                    profile == EquipmentProfile.TRIDRONE && sounderPoint == null && !legacyConfirmation)) {
+                    Toast.makeText(this, "Enter a profile name, nonnegative measurements and a valid tolerance. Verify any confirmed offset reference.", Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                try {
+                    EquipmentSettings(distance, antennaReference ?: "UNSET", confirmed.isChecked, ms, submerged,
+                        profileName, sounderPoint).save(profile.file(this))
+                    displayedProfile = null
+                    updateDisplay()
+                    Toast.makeText(this, "Equipment profile saved", Toast.LENGTH_SHORT).show()
                     dialog.dismiss()
-                } catch (e: Exception) { Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show() }
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
             }
         }
         dialog.show()
@@ -794,7 +922,7 @@ class MainActivity : Activity(), LocationListener {
             }.show()
     }
     private fun showWifiRtkSetup() {
-        val prefs = getSharedPreferences("wifi_rtk_settings", MODE_PRIVATE)
+        val prefs = EquipmentProfile.active(this).receiver(this)
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(28, 12, 28, 12)
@@ -935,16 +1063,25 @@ class MainActivity : Activity(), LocationListener {
                 Toast.makeText(this, "Enable Bluetooth and pair Reach RS2+ in Android settings", Toast.LENGTH_LONG).show()
                 return
             }
-            val devices = adapter.bondedDevices.toList().sortedBy { it.name ?: it.address }
+            val prefs = EquipmentProfile.active(this).receiver(this)
+            val savedAddress = prefs.getString("bluetooth_address", null)
+            val devices = adapter.bondedDevices.sortedWith(
+                compareBy({ it.address != savedAddress }, { it.name ?: it.address }))
             if (devices.isEmpty()) {
                 Toast.makeText(this, "No paired Bluetooth devices. Pair the RS2+ first.", Toast.LENGTH_LONG).show()
                 return
             }
-            val labels = devices.map { (it.name ?: "Unknown") + " (" + it.address + ")" }.toTypedArray()
+            val labels = devices.map {
+                "${it.name ?: "Unknown"} (${it.address})${if (it.address == savedAddress) " • Saved" else ""}"
+            }.toTypedArray()
             android.app.AlertDialog.Builder(this).setTitle("Select paired RTK receiver")
                 .setItems(labels) { _, i ->
                     val intent = Intent(this, RtkService::class.java).putExtra("address", devices[i].address)
-                    try { stopService(Intent(this, WifiRtkService::class.java)); startForegroundService(intent) }
+                    try {
+                        stopService(Intent(this, WifiRtkService::class.java))
+                        startForegroundService(intent)
+                        prefs.edit().putString("bluetooth_address", devices[i].address).apply()
+                    }
                     catch (e: Exception) { Toast.makeText(this, "RTK start failed: " + e.message, Toast.LENGTH_LONG).show() }
                 }.setNegativeButton("Cancel", null).show()
         } catch (e: Exception) {
@@ -968,11 +1105,18 @@ class MainActivity : Activity(), LocationListener {
             (if (live) "  •  $fixType" else "  •  awaiting live GGA") +
             "\n" + (gnss.getString("detail", "") ?: "") +
             "\nGGA: " + gnss.getInt("fixes", 0)
-        val isCee = ceeLineSelected()
-        val expectedProtocol = if (isCee) CeeLineDbt.PROTOCOL else HydroLiteDecoder.PROTOCOL
+        val profile = EquipmentProfile.active(this)
+        if (displayedProfile != profile) {
+            displayedGeometry = profile.settings(this)
+            displayedProfile = profile
+        }
+        val name = profile.name(displayedGeometry)
+        surveyProfileButton.text = "Equipment • $name"
+        sounderProfileButton.text = "Equipment profile • $name"
+        val isCee = profile == EquipmentProfile.BOAT
+        val expectedProtocol = profile.protocol
         val reading = HydroLive.depth?.takeIf { it.protocol == expectedProtocol }
         val sounderConnected = HydroLive.sounderConnected && (HydroLive.depth == null || reading != null)
-        sounderProfileButton.text = "Sounder profile • " + if (isCee) "CEE-LINE USB" else "HydroLite Plus"
         val depthState = reading?.status(sounderConnected, SystemClock.elapsedRealtimeNanos())
             ?: "NO_READING"
         val depthValid = reading?.valid == true && depthState.startsWith("VALID")
@@ -997,16 +1141,19 @@ class MainActivity : Activity(), LocationListener {
             sounderStatusButton.text = "Sounder • " + when {
                 !sounderConnected -> "Disconnected"
                 depthValid -> if (isCee) "Valid DBT" else "Valid • provisional"
+                depthState == "NO_READING_STALE" -> "Stale"
                 depthState.startsWith("INVALID") -> "Invalid"
                 else -> "No Reading"
             }
             // The eight-field protocol remains unverified even with a fresh numeric depth.
             sounderStatusButton.setBackgroundColor(if (sounderConnected) amber else red)
             val shownMeters = if (isCee) HydroLive.waterDepthMeters(this) else reading?.meters
-            val value = if (depthValid && shownMeters != null) String.format(Locale.US, "%.2f US survey ft", SurveyUnits.feet(shownMeters)) else "—"
-            liveDepth.text = (if (isCee) "WATER DEPTH  " else "HydroLite raw reading • provisional  ") + value
+            val presentation = surveyDepth(depthState, sounderConnected, shownMeters)
+            liveDepth.text = presentation.title
+            depthCorrection.text = listOfNotNull(presentation.status, if (isCee) "CEE-LINE • DBT + waterline distance"
+                else "HydroLite • Correction status unverified").joinToString("  •  ")
             liveDepth.setTextColor(when {
-                depthValid -> Color.rgb(89, 220, 145)
+                presentation.status == null -> Color.rgb(89, 220, 145)
                 sounderConnected -> Color.rgb(255, 193, 72)
                 else -> Color.rgb(255, 110, 110)
             })
@@ -1025,9 +1172,13 @@ class MainActivity : Activity(), LocationListener {
             sounderStatusButton.setBackgroundColor(Color.rgb(156, 100, 16))
             surveySummary.text = "DEMO • Synthetic observations only"
             liveDepth.text = "DEMO • Live measurements hidden"
+            depthCorrection.text = ""
             liveRecording.text = "DEMO • Synthetic recording controls below"
             updateDemoUi()
         }
+        val mapSnapshot = if (demoMode) LiveMapSnapshot(null, emptyList(), emptyList())
+            else HydroLive.mapSnapshot(SystemClock.elapsedRealtimeNanos(), activeProject?.id)
+        surveyMap.showCoverage(mapSnapshot, follow = HydroLive.recording)
         setupNext.setTextColor(Color.WHITE)
         setupNext.setBackgroundColor(if (if (demoMode) demoRecording else HydroLive.recording)
             Color.rgb(151, 49, 49) else Color.rgb(21, 119, 78))
@@ -1037,7 +1188,7 @@ class MainActivity : Activity(), LocationListener {
             if (!sounderConnected) reasons.add("USB sounder disconnected")
             if (!depthValid) reasons.add("DBT missing, invalid or stale")
             if (!live || gnss.getString("quality", "") !in listOf("4", "5")) reasons.add("Fresh RTK FIX/FLOAT required")
-            if (!EquipmentSettings.load(HydroLive.equipmentFile(this, CeeLineDbt.PROTOCOL)).ceeValid) reasons.add("Confirm both vertical measurements")
+            if (!displayedGeometry.ceeValid) reasons.add("Confirm both vertical measurements")
             "SURVEY READINESS • " + (if (reasons.isEmpty()) "GO validates epoch pairing" else reasons.joinToString(" • ")) +
                 "\nNAVD88 withheld without verified vertical control"
         } else "SURVEY READINESS • Provisional acquisition only\nNo verified vertical control"
@@ -1101,8 +1252,6 @@ class MainActivity : Activity(), LocationListener {
             LinearLayout.LayoutParams.MATCH_PARENT,
             (resources.displayMetrics.heightPixels * 0.62f).toInt()
         ))
-        val track = mutableListOf<Pair<Double, Double>>()
-        var lastTimestamp = 0L
         val dialog = android.app.AlertDialog.Builder(this)
             .setTitle("Boat track & sounding locations")
             .setView(container)
@@ -1111,39 +1260,14 @@ class MainActivity : Activity(), LocationListener {
         val ticker = object : Runnable {
             override fun run() {
                 if (!dialog.isShowing) return
-                val p = getSharedPreferences("rtk_status", MODE_PRIVATE)
-                val timestamp = p.getLong("last_fix_ms", 0L)
-                val age = System.currentTimeMillis() - timestamp
-                val lat = p.getString("lat", null)?.toDoubleOrNull()
-                val lon = p.getString("lon", null)?.toDoubleOrNull()
-                val valid = p.getString("state", "") == "connected" &&
-                    age in 0..5000 && lat != null && lon != null &&
-                    lat in -90.0..90.0 && lon in -180.0..180.0
-                val quality = when (p.getString("quality", "")) {
-                    "4" -> "RTK FIX"
-                    "5" -> "RTK FLOAT"
-                    "2" -> "DGPS"
-                    "1" -> "SINGLE"
-                    else -> "NO FIX"
+                val snapshot = if (demoMode) LiveMapSnapshot(null, emptyList(), emptyList())
+                    else HydroLive.mapSnapshot(SystemClock.elapsedRealtimeNanos(), activeProject?.id)
+                map.showCoverage(snapshot, follow = HydroLive.recording)
+                statusLabel.text = when {
+                    demoMode -> "DEMO • Live positions hidden"
+                    snapshot.current == null -> "Awaiting fresh GNSS • Offline coverage"
+                    else -> "Live GNSS • Offline coverage"
                 }
-                if (valid) {
-                    val point = Pair(lat!!, lon!!)
-                    map.current = point
-                    if (timestamp > lastTimestamp) {
-                        if (track.size >= 2000) track.removeAt(0)
-                        track.add(point)
-                        lastTimestamp = timestamp
-                    }
-                } else {
-                    map.current = null
-                }
-                val soundingPoints = HydroLive.mapPoints()
-                map.tracks = listOf(track.toList(), soundingPoints)
-                statusLabel.text = "Emlid RS2+ • " +
-                    (if (valid) quality else "STREAM STALE / DISCONNECTED") +
-                    "\nTrack positions: ${track.size} • Satellites: " +
-                    p.getString("satellites", "—") +
-                    "\nSounding preview: ${soundingPoints.size} points"
                 handler.postDelayed(this, 500L)
             }
         }
@@ -1308,7 +1432,7 @@ class MainActivity : Activity(), LocationListener {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            startActivity(Intent.createChooser(intent, "Export TriDrone CSV"))
+            startActivity(Intent.createChooser(intent, "Export HydroField CSV"))
         } catch (e: Exception) {
             Toast.makeText(this, "Export failed: ${e.message}", Toast.LENGTH_LONG).show()
         }
