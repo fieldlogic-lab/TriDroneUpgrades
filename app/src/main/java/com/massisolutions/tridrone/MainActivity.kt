@@ -763,6 +763,7 @@ class MainActivity : Activity(), LocationListener {
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(current.offsetUsft?.toString().orEmpty())
         }
+        offset.visibility = android.view.View.GONE // Edited by tapping dimension A in diagram.
         form.addView(offset)
         if (profile == EquipmentProfile.TRIDRONE && !current.confirmed && current.offsetUsft == 6.75) {
             form.addView(TextView(this).apply { text = "Starting measurement: 81 in (6.75 ft). Verify the reference points and distance." })
@@ -793,7 +794,126 @@ class MainActivity : Activity(), LocationListener {
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(current.waterlineOffsetUsft?.toString().orEmpty())
         }
+        waterline.visibility = android.view.View.GONE // Edited by tapping dimension B in diagram.
         form.addView(waterline)
+
+        // Drawing is an illustration, not a calibrated scale. Measurements refer to
+        // explicitly configured GNSS and acoustic reference points; never inferred.
+        val geometryDiagram = object : android.view.View(this) {
+            private val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+            override fun onDraw(c: android.graphics.Canvas) {
+                super.onDraw(c)
+                val w = width.toFloat()
+                val h = height.toFloat()
+                fun line(x1: Float, y1: Float, x2: Float, y2: Float, color: Int, stroke: Float = 3f) {
+                    p.color = color; p.strokeWidth = dp(stroke.toInt()).toFloat()
+                    c.drawLine(x1, y1, x2, y2, p)
+                }
+                fun word(s: String, x: Float, y: Float, color: Int, size: Int = 13) {
+                    p.color = color; p.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    p.textSize = dp(size).toFloat()
+                    c.drawText(s, x, y, p)
+                }
+                val ink = android.graphics.Color.rgb(29, 57, 77)
+                val blue = android.graphics.Color.rgb(12, 115, 164)
+                val water = android.graphics.Color.rgb(190, 230, 246)
+                p.color = android.graphics.Color.rgb(243, 248, 251)
+                c.drawRoundRect(0f, 0f, w, h, dp(14).toFloat(), dp(14).toFloat(), p)
+                p.color = water
+                c.drawRect(0f, h * .47f, w, h * .95f, p)
+                line(0f, h * .47f, w, h * .47f, blue, 2f)
+                p.color = ink
+                c.drawCircle(w * .5f, h * .14f, dp(9).toFloat(), p)
+                line(w * .5f, h * .15f, w * .5f, h * .68f, ink, 3f)
+                p.color = blue
+                c.drawCircle(w * .5f, h * .69f, dp(11).toFloat(), p)
+                line(w * .06f, h * .94f, w * .94f, h * .94f, ink, 3f)
+                word("GPS", w * .54f, h * .14f, ink)
+                word("WATERLINE", w * .05f, h * .44f, ink)
+                word("SOUNDER", w * .54f, h * .73f, ink)
+                // A is GNSS reference to acoustic reference. B is waterline to acoustic reference.
+                line(w * .85f, h * .16f, w * .85f, h * .67f, blue)
+                line(w * .83f, h * .16f, w * .87f, h * .16f, blue)
+                line(w * .83f, h * .67f, w * .87f, h * .67f, blue)
+                line(w * .15f, h * .49f, w * .15f, h * .67f, blue)
+                line(w * .13f, h * .49f, w * .17f, h * .49f, blue)
+                line(w * .13f, h * .67f, w * .17f, h * .67f, blue)
+                word("Tap A or B to enter measurements", w * .06f, h * .98f, ink, 11)
+            }
+        }
+        val diagramCard = android.widget.FrameLayout(this).apply {
+            addView(geometryDiagram, android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, dp(320)))
+        }
+        fun editDiagramDistance(field: EditText, title: String) {
+            val input = EditText(this).apply {
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                    android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+                setSingleLine()
+                hint = "US survey feet (positive)"
+                setText(field.text)
+                selectAll()
+            }
+            val wrapper = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(22), dp(8), dp(22), 0)
+                addView(input)
+            }
+            val editDialog = android.app.AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage("Measure between the indicated reference points. Enter a nonnegative distance in US survey feet.")
+                .setView(wrapper)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Apply", null).create()
+            editDialog.setOnShowListener {
+                editDialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                    val value = input.text.toString().toDoubleOrNull()
+                    if (value == null || !value.isFinite() || value < 0) {
+                        input.error = "Enter a valid nonnegative distance"
+                    } else {
+                        field.setText(value.toString())
+                        geometryDiagram.invalidate()
+                        editDialog.dismiss()
+                    }
+                }
+            }
+            editDialog.show()
+        }
+        val dimensionA = Button(this).apply {
+            text = "A • " + (current.offsetUsft?.toString() ?: "Set") + " ftUS"
+            setOnClickListener { editDiagramDistance(offset, "A — GPS reference to sounder") }
+        }
+        val dimensionB = Button(this).apply {
+            text = "B • " + (current.waterlineOffsetUsft?.toString() ?: "Set") + " ftUS"
+            setOnClickListener { editDiagramDistance(waterline, "B — Sounder below waterline") }
+        }
+        diagramCard.addView(dimensionA, android.widget.FrameLayout.LayoutParams(
+            dp(150), dp(49), android.view.Gravity.TOP or android.view.Gravity.RIGHT).apply {
+            topMargin = dp(124); rightMargin = dp(6)
+        })
+        diagramCard.addView(dimensionB, android.widget.FrameLayout.LayoutParams(
+            dp(150), dp(49), android.view.Gravity.TOP or android.view.Gravity.LEFT).apply {
+            topMargin = dp(190); leftMargin = dp(6)
+        })
+        offset.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                dimensionA.text = "A • " + (s?.takeIf { it.isNotBlank() } ?: "Set") + " ftUS"
+            }
+            override fun afterTextChanged(s: android.text.Editable?) = Unit
+        })
+        waterline.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                dimensionB.text = "B • " + (s?.takeIf { it.isNotBlank() } ?: "Set") + " ftUS"
+            }
+            override fun afterTextChanged(s: android.text.Editable?) = Unit
+        })
+        form.addView(diagramCard, 1)
+        form.addView(TextView(this).apply {
+            text = "A = GPS reference → sounder acoustic reference. B = waterline → submerged sounder. Tap either labeled dimension to edit; drawing not to scale."
+            textSize = 13f
+        }, 2)
         val confirmed = CheckBox(this).apply {
             text = if (profile == EquipmentProfile.BOAT) {
                 "I verified offset and receiver height reference; no duplicate antenna correction"
