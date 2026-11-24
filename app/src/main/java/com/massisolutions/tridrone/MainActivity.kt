@@ -971,6 +971,10 @@ class MainActivity : Activity(), LocationListener {
         }
         form.addView(showEvidence)
         form.addView(evidenceForm)
+        form.addView(Button(this).apply {
+            text = "Review saved ARP geometry"
+            setOnClickListener { showArpPreview(this@MainActivity, profile.settings(this@MainActivity)) }
+        })
         val confirmed = CheckBox(this).apply {
             text = "I checked the measured distances and their physical reference points."
             isChecked = current.confirmed

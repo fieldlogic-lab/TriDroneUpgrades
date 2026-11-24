@@ -120,6 +120,11 @@ class FieldUiSmokeTest {
                 try {
                     step("select CEE-LINE") { chooseSounder(cee = true) }
                     step("open equipment") { openEquipmentSettings() }
+                    step("require saved reference evidence") {
+                        onView(withText("Review saved ARP geometry")).inRoot(isDialog()).perform(scrollTo(), click())
+                        onView(withText("Saved ARP geometry is incomplete")).inRoot(isDialog()).check(matches(isDisplayed()))
+                        onView(withText("Close")).inRoot(isDialog()).perform(click())
+                    }
                     step("enter offset") { editEquipmentDimension("A", "3.25") }
                     step("enter waterline measurement") { editEquipmentDimension("B", "0.70") }
                     step("open reference dropdown") {
@@ -138,6 +143,12 @@ class FieldUiSmokeTest {
                             .perform(scrollTo(), click())
                         onView(withHint("Evidence for receiver output at physical ARP")).inRoot(isDialog())
                             .perform(scrollTo(), replaceText("Receiver fixture metadata"), closeSoftKeyboard())
+                    }
+                    step("record raw depth reference evidence") {
+                        onView(withText("Raw acoustic depth is measured below the transducer face")).inRoot(isDialog())
+                            .perform(scrollTo(), click())
+                        onView(withHint("Evidence for raw depth below transducer face")).inRoot(isDialog())
+                            .perform(scrollTo(), replaceText("Sounder fixture metadata"), closeSoftKeyboard())
                     }
                     step("confirm and save") {
                         onView(withText("I checked the measured distances and their physical reference points."))
@@ -160,6 +171,31 @@ class FieldUiSmokeTest {
                     }
                     equipmentDimension("A").perform(scrollTo())
                     screenshot("equipment-settings-restored")
+                    step("preview requires independent datum and unit selection") {
+                        val savedBytes = file.readBytes()
+                        onView(withText("Review saved ARP geometry")).inRoot(isDialog()).perform(scrollTo(), click())
+                        onView(withText("Calculate")).inRoot(isDialog()).perform(click())
+                        onView(withText("Enter a documented vertical datum or project reference."))
+                            .inRoot(isDialog()).check(matches(isDisplayed()))
+                        onView(withText("OK")).inRoot(isDialog()).perform(click())
+                        onView(withHint("Elevation already reduced to physical ARP")).inRoot(isDialog())
+                            .perform(scrollTo(), replaceText("10"), closeSoftKeyboard())
+                        onView(withHint("Documented vertical datum or project reference")).inRoot(isDialog())
+                            .perform(scrollTo(), replaceText("Synthetic datum"), closeSoftKeyboard())
+                        onView(withHint("Raw acoustic depth below transducer face")).inRoot(isDialog())
+                            .perform(scrollTo(), replaceText("2"), closeSoftKeyboard())
+                        for (description in listOf("ARP elevation unit", "Acoustic depth unit")) {
+                            onView(withContentDescription(description)).inRoot(isDialog()).perform(scrollTo(), click())
+                            onData(equalTo("Meters")).inRoot(isPlatformPopup()).perform(click())
+                        }
+                        onView(withText("I checked the entered height is at physical ARP in this vertical reference"))
+                            .inRoot(isDialog()).perform(scrollTo(), click())
+                        onView(withText("Calculate")).inRoot(isDialog()).perform(click())
+                        onView(withText(containsString("Bottom: 7.009 m"))).inRoot(isDialog()).check(matches(isDisplayed()))
+                        onView(withText("OK")).inRoot(isDialog()).perform(click())
+                        onView(withText("Close")).inRoot(isDialog()).perform(click())
+                        assertArrayEquals(savedBytes, file.readBytes())
+                    }
                     step("cancel edit preserves confirmation") {
                         editEquipmentDimension("A", "4.00", "Cancel")
                         onView(withText("I checked the measured distances and their physical reference points."))
