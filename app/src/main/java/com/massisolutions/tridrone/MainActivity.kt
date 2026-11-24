@@ -828,9 +828,9 @@ class MainActivity : Activity(), LocationListener {
                 p.color = blue
                 c.drawCircle(w * .5f, h * .69f, dp(11).toFloat(), p)
                 line(w * .06f, h * .94f, w * .94f, h * .94f, ink, 3f)
-                word("GPS", w * .54f, h * .14f, ink)
+                word("GNSS reference", w * .54f, h * .14f, ink)
                 word("WATERLINE", w * .05f, h * .44f, ink)
-                word("SOUNDER", w * .54f, h * .73f, ink)
+                word("Acoustic reference", w * .52f, h * .73f, ink)
                 // A is GNSS reference to acoustic reference. B is waterline to acoustic reference.
                 line(w * .85f, h * .16f, w * .85f, h * .67f, blue)
                 line(w * .83f, h * .16f, w * .87f, h * .16f, blue)
@@ -838,7 +838,11 @@ class MainActivity : Activity(), LocationListener {
                 line(w * .15f, h * .49f, w * .15f, h * .67f, blue)
                 line(w * .13f, h * .49f, w * .17f, h * .49f, blue)
                 line(w * .13f, h * .67f, w * .17f, h * .67f, blue)
-                word("Tap A or B to enter measurements", w * .06f, h * .98f, ink, 11)
+                word("Bottom", w * .06f, h * .91f, ink)
+                if (profile == EquipmentProfile.BOAT) {
+                    line(w * .50f, h * .76f, w * .50f, h * .90f, blue, 2f)
+                    word("DBT depth", w * .53f, h * .85f, ink)
+                }
             }
         }
         val diagramCard = android.widget.FrameLayout(this).apply {
@@ -864,6 +868,9 @@ class MainActivity : Activity(), LocationListener {
                 .setMessage("Measure between the indicated reference points. Enter a nonnegative distance in US survey feet.")
                 .setView(wrapper)
                 .setNegativeButton("Cancel", null)
+                .setNeutralButton("Clear") { _, _ ->
+                    if (field.text.isNotEmpty()) field.setText("")
+                }
                 .setPositiveButton("Apply", null).create()
             editDialog.setOnShowListener {
                 editDialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -871,49 +878,56 @@ class MainActivity : Activity(), LocationListener {
                     if (value == null || !value.isFinite() || value < 0) {
                         input.error = "Enter a valid nonnegative distance"
                     } else {
-                        field.setText(value.toString())
-                        geometryDiagram.invalidate()
+                        if (field.text.toString().toDoubleOrNull() != value) {
+                            field.setText(input.text.toString())
+                        }
                         editDialog.dismiss()
                     }
                 }
             }
             editDialog.show()
         }
-        val dimensionA = Button(this).apply {
-            text = "A • " + (current.offsetUsft?.toString() ?: "Set") + " ftUS"
-            setOnClickListener { editDiagramDistance(offset, "A — GPS reference to sounder") }
+        fun dimensionButton(letter: String, description: String, field: EditText) = Button(this).apply {
+            fun updateLabel() {
+                val measurement = field.text.toString()
+                text = if (measurement.isBlank()) "$letter • Set" else "$letter • $measurement ftUS"
+                contentDescription = if (measurement.isBlank()) {
+                    "$letter, $description, measurement unset"
+                } else "$letter, $description, $measurement US survey feet"
+            }
+            updateLabel()
+            setOnClickListener { editDiagramDistance(field, "$letter — $description") }
+            field.addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    updateLabel()
+                }
+                override fun afterTextChanged(s: android.text.Editable?) = Unit
+            })
         }
-        val dimensionB = Button(this).apply {
-            text = "B • " + (current.waterlineOffsetUsft?.toString() ?: "Set") + " ftUS"
-            setOnClickListener { editDiagramDistance(waterline, "B — Sounder below waterline") }
-        }
+        val dimensionA = dimensionButton("A", "GNSS reference to acoustic reference", offset)
+        val dimensionB = dimensionButton("B", "Acoustic reference below waterline", waterline)
         diagramCard.addView(dimensionA, android.widget.FrameLayout.LayoutParams(
-            dp(150), dp(49), android.view.Gravity.TOP or android.view.Gravity.RIGHT).apply {
-            topMargin = dp(124); rightMargin = dp(6)
+            dp(120), dp(49), android.view.Gravity.TOP or android.view.Gravity.END).apply {
+            topMargin = dp(91); marginEnd = dp(4)
         })
         diagramCard.addView(dimensionB, android.widget.FrameLayout.LayoutParams(
-            dp(150), dp(49), android.view.Gravity.TOP or android.view.Gravity.LEFT).apply {
-            topMargin = dp(190); leftMargin = dp(6)
-        })
-        offset.addTextChangedListener(object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                dimensionA.text = "A • " + (s?.takeIf { it.isNotBlank() } ?: "Set") + " ftUS"
-            }
-            override fun afterTextChanged(s: android.text.Editable?) = Unit
-        })
-        waterline.addTextChangedListener(object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                dimensionB.text = "B • " + (s?.takeIf { it.isNotBlank() } ?: "Set") + " ftUS"
-            }
-            override fun afterTextChanged(s: android.text.Editable?) = Unit
+            dp(120), dp(49), android.view.Gravity.TOP or android.view.Gravity.START).apply {
+            topMargin = dp(162); marginStart = dp(4)
         })
         form.addView(diagramCard, 1)
         form.addView(TextView(this).apply {
-            text = "A = GPS reference → sounder acoustic reference. B = waterline → submerged sounder. Tap either labeled dimension to edit; drawing not to scale."
-            textSize = 13f
+            text = "Tap A or B to edit the vertical distances in US survey feet. The diagram is illustrative."
+            textSize = 14f
         }, 2)
+        form.addView(TextView(this).apply {
+            text = if (profile == EquipmentProfile.BOAT) {
+                "Water depth = DBT depth + B. Bottom elevation = verified GNSS reference elevation − A − DBT depth. Use consistent units. Bottom elevation requires verified height reference and datum."
+            } else {
+                "HydroLite depth is shown as reported. Confirm its acoustic reference and any sounder correction before calculating bottom elevation."
+            }
+            textSize = 14f
+        })
         val confirmed = CheckBox(this).apply {
             text = if (profile == EquipmentProfile.BOAT) {
                 "I verified offset and receiver height reference; no duplicate antenna correction"
