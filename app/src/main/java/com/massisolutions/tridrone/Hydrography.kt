@@ -43,7 +43,9 @@ object HydroLiteDecoder {
 data class VerticalProvenance(
     val offsetEndsAtTransducerFace: Boolean = false,
     val gnssHeightReferenceEvidence: String? = null,
-    val sounderAcousticReferenceEvidence: String? = null
+    val sounderAcousticReferenceEvidence: String? = null,
+    val declaresGnssHeightAtArp: Boolean = false,
+    val declaresDepthFromFace: Boolean = false
 )
 
 data class EquipmentSettings(val offsetUsft: Double? = null, val antennaReference: String = "UNSET",
@@ -70,6 +72,8 @@ data class EquipmentSettings(val offsetUsft: Double? = null, val antennaReferenc
             setProperty("offset_ends_at_transducer_face", verticalProvenance.offsetEndsAtTransducerFace.toString())
             setProperty("gnss_height_reference_evidence", verticalProvenance.gnssHeightReferenceEvidence.orEmpty())
             setProperty("sounder_acoustic_reference_evidence", verticalProvenance.sounderAcousticReferenceEvidence.orEmpty())
+            setProperty("declares_gnss_height_at_arp", verticalProvenance.declaresGnssHeightAtArp.toString())
+            setProperty("declares_depth_from_face", verticalProvenance.declaresDepthFromFace.toString())
             setProperty("pair_tolerance_ms", pairToleranceMillis.toString())
         }
         file.parentFile?.mkdirs()
@@ -92,7 +96,9 @@ data class EquipmentSettings(val offsetUsft: Double? = null, val antennaReferenc
                     VerticalProvenance(
                         p.getProperty("offset_ends_at_transducer_face") == "true",
                         p.getProperty("gnss_height_reference_evidence")?.takeIf(String::isNotBlank),
-                        p.getProperty("sounder_acoustic_reference_evidence")?.takeIf(String::isNotBlank)
+                        p.getProperty("sounder_acoustic_reference_evidence")?.takeIf(String::isNotBlank),
+                        p.getProperty("declares_gnss_height_at_arp") == "true",
+                        p.getProperty("declares_depth_from_face") == "true"
                     ))
             } catch (_: Exception) {
                 EquipmentSettings()

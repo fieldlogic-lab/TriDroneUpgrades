@@ -88,7 +88,9 @@ class HydrographyTest {
                 verticalProvenance = VerticalProvenance(
                     offsetEndsAtTransducerFace = true,
                     gnssHeightReferenceEvidence = "Receiver configuration record",
-                    sounderAcousticReferenceEvidence = "Sounder configuration record"
+                    sounderAcousticReferenceEvidence = "Sounder configuration record",
+                    declaresGnssHeightAtArp = true,
+                    declaresDepthFromFace = true
                 )
             )
             documented.save(file)

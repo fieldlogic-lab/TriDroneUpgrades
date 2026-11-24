@@ -934,7 +934,15 @@ class MainActivity : Activity(), LocationListener {
         }
         form.addView(offsetEndsAtFace)
         val referenceEvidence = TextView(this).apply {
-            text = "Document output references separately from measured equipment geometry. Leave a field blank when that output reference is unverified."
+            text = "Document output references separately from measured equipment geometry. A declaration requires supporting evidence."
+        }
+        val declaresGnssHeightAtArp = CheckBox(this).apply {
+            text = "Receiver height output refers to physical ARP"
+            isChecked = current.verticalProvenance.declaresGnssHeightAtArp
+        }
+        val declaresDepthFromFace = CheckBox(this).apply {
+            text = "Raw acoustic depth is measured below the transducer face"
+            isChecked = current.verticalProvenance.declaresDepthFromFace
         }
         val gnssEvidence = EditText(this).apply {
             hint = "Evidence for receiver output at physical ARP"
@@ -950,20 +958,21 @@ class MainActivity : Activity(), LocationListener {
             orientation = LinearLayout.VERTICAL
             visibility = android.view.View.GONE
             addView(referenceEvidence)
+            addView(declaresGnssHeightAtArp)
             addView(gnssEvidence)
+            addView(declaresDepthFromFace)
             addView(sounderEvidence)
         }
-        form.addView(CheckBox(this).apply {
+        val showEvidence = CheckBox(this).apply {
             text = "Show instrument reference evidence"
             setOnCheckedChangeListener { _, show ->
                 evidenceForm.visibility = if (show) android.view.View.VISIBLE else android.view.View.GONE
             }
-        })
+        }
+        form.addView(showEvidence)
         form.addView(evidenceForm)
         val confirmed = CheckBox(this).apply {
-            text = if (profile == EquipmentProfile.BOAT) {
-                "I verified offset and receiver height reference; no duplicate antenna correction"
-            } else "I verified the distance and both reference points."
+            text = "I checked the measured distances and their physical reference points."
             isChecked = current.confirmed
         }
         form.addView(confirmed)
@@ -1017,8 +1026,16 @@ class MainActivity : Activity(), LocationListener {
                     val provenance = VerticalProvenance(
                         offsetEndsAtFace.isChecked,
                         gnssEvidence.text.toString().trim().ifBlank { null },
-                        sounderEvidence.text.toString().trim().ifBlank { null }
+                        sounderEvidence.text.toString().trim().ifBlank { null },
+                        declaresGnssHeightAtArp.isChecked,
+                        declaresDepthFromFace.isChecked
                     )
+                    if (provenance.declaresGnssHeightAtArp && provenance.gnssHeightReferenceEvidence == null ||
+                        provenance.declaresDepthFromFace && provenance.sounderAcousticReferenceEvidence == null) {
+                        Toast.makeText(this, "Add evidence for each declared output reference.", Toast.LENGTH_LONG).show()
+                        showEvidence.isChecked = true
+                        return@setOnClickListener
+                    }
                     EquipmentSettings(distance, antennaReference ?: "UNSET", confirmed.isChecked, ms, submerged,
                         profileName, sounderPoint, provenance).save(profile.file(this))
                     displayedProfile = null
