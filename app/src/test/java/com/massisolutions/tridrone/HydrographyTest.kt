@@ -74,6 +74,32 @@ class HydrographyTest {
         } finally { folder.deleteRecursively() }
     }
 
+    @Test fun arpGeometryRequiresExplicitPhysicalEndpointsAndPreservesLegacyProfiles() {
+        val folder = Files.createTempDirectory("hydro-arp-settings").toFile()
+        try {
+            val file = java.io.File(folder, "equipment.properties")
+            file.writeText("offset_usft=4.25\nantenna_reference=ANTENNA_REFERENCE_POINT\nconfirmed=true\n")
+            val legacy = EquipmentSettings.load(file)
+            assertTrue(legacy.valid)
+            assertNull(legacy.arpToTransducerFaceUsft)
+            assertEquals(VerticalProvenance(), legacy.verticalProvenance)
+
+            val documented = legacy.copy(
+                verticalProvenance = VerticalProvenance(
+                    offsetEndsAtTransducerFace = true,
+                    gnssHeightReferenceEvidence = "Receiver configuration record",
+                    sounderAcousticReferenceEvidence = "Sounder configuration record"
+                )
+            )
+            documented.save(file)
+            assertEquals(documented, EquipmentSettings.load(file))
+            assertEquals(4.25, documented.arpToTransducerFaceUsft!!, 0.0)
+            assertNull(documented.copy(antennaReference = "RECEIVER_OUTPUT_REFERENCE").arpToTransducerFaceUsft)
+            assertNull(documented.copy(offsetUsft = -4.25).arpToTransducerFaceUsft)
+            assertNull(documented.copy(offsetUsft = Double.NaN).arpToTransducerFaceUsft)
+        } finally { folder.deleteRecursively() }
+    }
+
     @Test fun bottomElevationRequiresVerifiedMatchingReferenceAndAppliesOffsetOnlyOnce() {
         val equipment = EquipmentSettings(4.0, "ANTENNA_REFERENCE_POINT", true)
         val height = VerticalReference(100.0, "ANTENNA_REFERENCE_POINT", "EPSG:6360", true, "independent control")

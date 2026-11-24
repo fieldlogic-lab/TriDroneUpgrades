@@ -184,6 +184,17 @@ object HydroLive {
             put("depth_range_guard_m", if (isCee) JSONObject.NULL else HydroLiteDecoder.MAX_DEPTH_METERS)
             put("vertical_offset_usft", settings.offsetUsft ?: JSONObject.NULL)
             put("antenna_reference", settings.antennaReference); put("offset_confirmed", settings.confirmed)
+            val arpOffset = settings.arpToTransducerFaceUsft
+            val provenance = settings.verticalProvenance
+            val gnssEvidence = provenance.gnssHeightReferenceEvidence?.takeIf(String::isNotBlank)
+            val sounderEvidence = provenance.sounderAcousticReferenceEvidence?.takeIf(String::isNotBlank)
+            put("arp_to_transducer_face_usft", arpOffset ?: JSONObject.NULL)
+            put("arp_to_transducer_face_confirmed", arpOffset != null && settings.confirmed)
+            put("gnss_height_reference", if (gnssEvidence != null) "ANTENNA_REFERENCE_POINT" else "UNVERIFIED")
+            put("gnss_height_reference_evidence", gnssEvidence ?: JSONObject.NULL)
+            put("sounder_acoustic_reference", if (sounderEvidence != null) "TRANSDUCER_FACE" else "UNVERIFIED")
+            put("sounder_acoustic_reference_evidence", sounderEvidence ?: JSONObject.NULL)
+            put("instrument_reference_evidence_basis", "operator-entered profile evidence; independent verification not performed")
             put("offset_sign", "positive downward"); put("pair_tolerance_ms", settings.pairToleranceMillis)
             put("time_basis", "device receipt time; hardware latency not measured")
             put("sounder_raw_bytes_file", sounderRaw); put("gnss_raw_file", rawFile.name)

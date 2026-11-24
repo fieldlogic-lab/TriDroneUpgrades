@@ -129,6 +129,14 @@ class FieldUiSmokeTest {
                         onData(equalTo("Physical antenna reference point (ARP)"))
                             .inRoot(isPlatformPopup()).perform(click())
                     }
+                    step("record physical endpoint and evidence separately") {
+                        onView(withText("Distance A ends at the physical transducer face"))
+                            .inRoot(isDialog()).perform(scrollTo(), click())
+                        onView(withText("Show instrument reference evidence")).inRoot(isDialog())
+                            .perform(scrollTo(), click())
+                        onView(withHint("Evidence for receiver output at physical ARP")).inRoot(isDialog())
+                            .perform(scrollTo(), replaceText("Receiver fixture metadata"), closeSoftKeyboard())
+                    }
                     step("confirm and save") {
                         onView(withText("I verified offset and receiver height reference; no duplicate antenna correction"))
                             .inRoot(isDialog()).perform(scrollTo(), click())
@@ -137,6 +145,9 @@ class FieldUiSmokeTest {
                     assertEquals(3.25, EquipmentSettings.load(file).offsetUsft!!, 0.0)
                     assertEquals(0.70, EquipmentSettings.load(file).waterlineOffsetUsft!!, 0.0)
                     assertTrue(EquipmentSettings.load(file).confirmed)
+                    assertEquals(3.25, EquipmentSettings.load(file).arpToTransducerFaceUsft!!, 0.0)
+                    assertEquals("Receiver fixture metadata", EquipmentSettings.load(file)
+                        .verticalProvenance.gnssHeightReferenceEvidence)
                     step("recreate activity") { scenario.recreate() }
                     step("reopen equipment") { openEquipmentSettings() }
                     step("verify restored configuration") {
@@ -207,7 +218,9 @@ class FieldUiSmokeTest {
         }
 
         try {
-            EquipmentSettings(3.25, "ANTENNA_REFERENCE_POINT", true, 1000L, 0.7).save(ceeEquipment)
+            EquipmentSettings(3.25, "ANTENNA_REFERENCE_POINT", true, 1000L, 0.7,
+                verticalProvenance = VerticalProvenance(true, "Receiver fixture", "Sounder fixture"))
+                .save(ceeEquipment)
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 onView(withId(R.id.tab_sessions)).perform(click())
                 onView(withText("Projects and collection history")).perform(scrollTo(), click())
@@ -255,6 +268,14 @@ class FieldUiSmokeTest {
                     sessions.map { it.metadata.getString("protocol") })
                 assertEquals(listOf(37, 43, 37), sessions.map { it.csvHeader.split(',').size })
                 assertEquals(0.7, sessions[1].metadata.getDouble("transducer_below_waterline_usft"), 0.0)
+                assertEquals(3.25, sessions[1].metadata.getDouble("arp_to_transducer_face_usft"), 0.0)
+                assertTrue(sessions[1].metadata.getBoolean("arp_to_transducer_face_confirmed"))
+                assertEquals("ANTENNA_REFERENCE_POINT", sessions[1].metadata.getString("gnss_height_reference"))
+                assertEquals("Receiver fixture", sessions[1].metadata.getString("gnss_height_reference_evidence"))
+                assertEquals("TRANSDUCER_FACE", sessions[1].metadata.getString("sounder_acoustic_reference"))
+                assertEquals("Sounder fixture", sessions[1].metadata.getString("sounder_acoustic_reference_evidence"))
+                assertEquals("UNVERIFIED", sessions[0].metadata.getString("gnss_height_reference"))
+                assertTrue(sessions[0].metadata.isNull("arp_to_transducer_face_usft"))
 
                 onView(withId(R.id.tab_sessions)).perform(click())
                 onView(withText("Projects and collection history")).perform(scrollTo(), click())
