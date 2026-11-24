@@ -2,7 +2,12 @@ name: Validate Android pull requests
 
 on:
   pull_request:
-    branches: [main, feature/issue-7-live-hydrography, feature/v0.4-project-collections]
+    branches:
+      - main
+      - feature/issue-7-live-hydrography
+      - feature/v0.4-project-collections
+      - codex/hydrofield-2101
+      - codex/hydrofield-tappable-vertical-diagram
 
 permissions:
   contents: read
