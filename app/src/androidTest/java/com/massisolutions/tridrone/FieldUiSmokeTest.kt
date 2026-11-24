@@ -120,14 +120,8 @@ class FieldUiSmokeTest {
                 try {
                     step("select CEE-LINE") { chooseSounder(cee = true) }
                     step("open equipment") { openEquipmentSettings() }
-                    step("enter offset") {
-                        onView(withHint("GNSS reference to transducer (+ US survey ft)"))
-                            .inRoot(isDialog()).perform(scrollTo(), replaceText("3.25"), closeSoftKeyboard())
-                    }
-                    step("enter waterline measurement") {
-                        onView(withHint("Transducer below waterline (+ US survey ft)"))
-                            .inRoot(isDialog()).perform(scrollTo(), replaceText("0.70"), closeSoftKeyboard())
-                    }
+                    step("enter offset") { editEquipmentDimension("A", "3.25") }
+                    step("enter waterline measurement") { editEquipmentDimension("B", "0.70") }
                     step("open reference dropdown") {
                         onView(isAssignableFrom(Spinner::class.java)).inRoot(isDialog()).perform(scrollTo(), click())
                     }
@@ -146,14 +140,30 @@ class FieldUiSmokeTest {
                     step("recreate activity") { scenario.recreate() }
                     step("reopen equipment") { openEquipmentSettings() }
                     step("verify restored configuration") {
-                        onView(withHint("GNSS reference to transducer (+ US survey ft)"))
-                            .inRoot(isDialog()).perform(scrollTo()).check(matches(withText("3.25")))
-                        onView(withHint("Transducer below waterline (+ US survey ft)"))
-                            .inRoot(isDialog()).perform(scrollTo()).check(matches(withText("0.7")))
+                        equipmentDimension("A").perform(scrollTo()).check(matches(withText("A • 3.25 ftUS")))
+                        equipmentDimension("B").perform(scrollTo()).check(matches(withText("B • 0.7 ftUS")))
                         onView(withText("I verified offset and receiver height reference; no duplicate antenna correction"))
                             .inRoot(isDialog()).perform(scrollTo()).check(matches(isChecked()))
                     }
+                    equipmentDimension("A").perform(scrollTo())
                     screenshot("equipment-settings-restored")
+                    step("cancel edit preserves confirmation") {
+                        editEquipmentDimension("A", "4.00", "Cancel")
+                        onView(withText("I verified offset and receiver height reference; no duplicate antenna correction"))
+                            .inRoot(isDialog()).perform(scrollTo()).check(matches(isChecked()))
+                    }
+                    step("applied edit clears confirmation without writing the profile") {
+                        editEquipmentDimension("A", "4.00")
+                        onView(withText("I verified offset and receiver height reference; no duplicate antenna correction"))
+                            .inRoot(isDialog()).perform(scrollTo()).check(matches(isNotChecked()))
+                        assertEquals(3.25, EquipmentSettings.load(file).offsetUsft!!, 0.0)
+                    }
+                    step("clear leaves an unset draft measurement") {
+                        equipmentDimension("B").perform(scrollTo(), click())
+                        onView(withText("Clear")).inRoot(isDialog()).perform(click())
+                        equipmentDimension("B").check(matches(withText("B • Set")))
+                        assertEquals(0.70, EquipmentSettings.load(file).waterlineOffsetUsft!!, 0.0)
+                    }
                     onView(withText("Cancel")).inRoot(isDialog()).perform(click())
                     chooseSounder(cee = false)
                     if (hydroOriginal == null) assertFalse(hydroFile.exists())
@@ -289,6 +299,16 @@ class FieldUiSmokeTest {
             android.os.SystemClock.sleep(100)
         } while (android.os.SystemClock.uptimeMillis() < deadline)
         throw failure
+    }
+
+    private fun equipmentDimension(letter: String) =
+        onView(withContentDescription(startsWith("$letter, "))).inRoot(isDialog())
+
+    private fun editEquipmentDimension(letter: String, value: String, action: String = "Apply") {
+        equipmentDimension(letter).perform(scrollTo(), click())
+        onView(withHint("US survey feet (positive)")).inRoot(isDialog())
+            .perform(replaceText(value), closeSoftKeyboard())
+        onView(withText(action)).inRoot(isDialog()).perform(click())
     }
 
     private fun openEquipmentSettings() {
