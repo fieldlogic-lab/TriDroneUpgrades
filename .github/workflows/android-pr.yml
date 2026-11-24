@@ -10,6 +10,7 @@ on:
       - codex/hydrofield-tappable-vertical-diagram
       - codex/hydrofield-offset-verification
       - codex/hydrofield-arp-provenance
+      - codex/hydrofield-arp-math
 
 permissions:
   contents: read
