@@ -8,6 +8,7 @@ on:
       - feature/v0.4-project-collections
       - codex/hydrofield-2101
       - codex/hydrofield-tappable-vertical-diagram
+      - codex/hydrofield-offset-verification
 
 permissions:
   contents: read
