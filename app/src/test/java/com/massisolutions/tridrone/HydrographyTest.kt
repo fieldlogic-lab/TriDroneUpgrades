@@ -114,6 +114,39 @@ class HydrographyTest {
         assertNull(BottomElevation.calculate(height, equipment, depth("1 0 0 0 0 11 100 0")))
     }
 
+    @Test fun arpVectorAgreementKeepsTransducerSubmergenceOutOfBottomElevation() {
+        val arp = VerticalMeasurement(10.0, VerticalUnit.METER)
+        val depth = VerticalMeasurement(2.0, VerticalUnit.METER)
+        val surveyFeet = BottomElevation.calculateArpMeters(
+            arp, VerticalMeasurement(1.4, VerticalUnit.US_SURVEY_FOOT), depth
+        )!!
+        assertEquals(9.573279146558293, surveyFeet.transducerFace, 1e-12)
+        assertEquals(7.573279146558293, surveyFeet.bottom, 1e-12)
+        assertEquals(2.060960121920244, WaterDepth.meters(
+            depth.meters(), VerticalMeasurement(0.2, VerticalUnit.US_SURVEY_FOOT).meters()
+        )!!, 1e-12)
+
+        val internationalFeet = BottomElevation.calculateArpMeters(
+            arp, VerticalMeasurement(1.4, VerticalUnit.INTERNATIONAL_FOOT), depth
+        )!!
+        assertEquals(7.57328, internationalFeet.bottom, 1e-12)
+        assertNotEquals(surveyFeet.bottom, internationalFeet.bottom, 1e-9)
+    }
+
+    @Test fun arpGeometryRejectsInvalidLengthsAndAcceptsNegativeElevations() {
+        val arp = VerticalMeasurement(-1.0, VerticalUnit.METER)
+        val offset = VerticalMeasurement(0.0, VerticalUnit.METER)
+        val depth = VerticalMeasurement(2.0, VerticalUnit.METER)
+        assertEquals(ArpElevationMeters(-1.0, -3.0), BottomElevation.calculateArpMeters(arp, offset, depth))
+        assertNull(BottomElevation.calculateArpMeters(arp.copy(value = Double.NaN), offset, depth))
+        assertNull(BottomElevation.calculateArpMeters(arp, offset.copy(value = -1.0), depth))
+        assertNull(BottomElevation.calculateArpMeters(arp, offset, depth.copy(value = 0.0)))
+        assertNull(BottomElevation.calculateArpMeters(arp, offset, depth.copy(value = Double.POSITIVE_INFINITY)))
+        assertNull(BottomElevation.calculateArpMeters(
+            arp.copy(value = -Double.MAX_VALUE), offset.copy(value = Double.MAX_VALUE), depth
+        ))
+    }
+
     @Test fun csvRetainsRawValuesPrecisionConfigurationAndWithheldElevation() {
         val d = depth()
         val row = parseCsv(HydroCsv.row(d, gnss(), EquipmentSettings(4.0, "ANTENNA_REFERENCE_POINT", true), "UNKNOWN"))
