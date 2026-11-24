@@ -9,6 +9,7 @@ on:
       - codex/hydrofield-2101
       - codex/hydrofield-tappable-vertical-diagram
       - codex/hydrofield-offset-verification
+      - codex/hydrofield-arp-provenance
 
 permissions:
   contents: read

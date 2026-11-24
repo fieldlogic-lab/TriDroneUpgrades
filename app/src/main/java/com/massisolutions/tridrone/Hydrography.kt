@@ -8,6 +8,24 @@ object SurveyUnits {
     fun feet(meters: Double) = meters * US_FEET_PER_METER
 }
 
+enum class VerticalUnit {
+    METER,
+    INTERNATIONAL_FOOT,
+    US_SURVEY_FOOT;
+
+    fun toMeters(value: Double): Double = when (this) {
+        METER -> value
+        INTERNATIONAL_FOOT -> value * 0.3048
+        US_SURVEY_FOOT -> value / SurveyUnits.US_FEET_PER_METER
+    }
+}
+
+data class VerticalMeasurement(val value: Double, val unit: VerticalUnit) {
+    fun meters() = unit.toMeters(value)
+}
+
+data class ArpElevationMeters(val transducerFace: Double, val bottom: Double)
+
 data class HydroDepth(val raw: String, val utcMillis: Long, val elapsedNanos: Long,
     val meters: Double?, val validity: String, val diagnostic: String,
     val protocol: String = HydroLiteDecoder.PROTOCOL) {
@@ -111,13 +129,39 @@ data class VerticalReference(val elevationUsft: Double, val antennaReference: St
     val datum: String, val transformationVerified: Boolean, val provenance: String)
 
 object BottomElevation {
+    /**
+     * Numerical geometry only. Supply an elevation already reduced to physical ARP, a positive-down
+     * ARP-to-face distance, and raw acoustic depth measured from that face. Both elevations use the
+     * ARP input datum. Transducer submergence is only used to calculate water depth.
+     */
+    fun calculateArpMeters(
+        arpElevation: VerticalMeasurement,
+        arpToFace: VerticalMeasurement,
+        acousticDepth: VerticalMeasurement
+    ): ArpElevationMeters? {
+        val face = faceElevation(arpElevation.meters(), arpToFace.meters()) ?: return null
+        val bottom = subtractDepth(face, acousticDepth.meters()) ?: return null
+        return ArpElevationMeters(face, bottom)
+    }
+
     /** Input height must already be at the selected reference. No antenna calibration is added here. */
     fun calculate(height: VerticalReference?, equipment: EquipmentSettings, depth: HydroDepth): Double? {
         if (height == null || !equipment.valid || !depth.valid || depth.meters == null ||
             !depth.meters.isFinite() || depth.meters <= 0 || !height.transformationVerified ||
             height.datum != "EPSG:6360" || height.provenance.isBlank() ||
             height.antennaReference != equipment.antennaReference || !height.elevationUsft.isFinite()) return null
-        return height.elevationUsft - equipment.offsetUsft!! - SurveyUnits.feet(depth.meters!!)
+        val face = faceElevation(height.elevationUsft, equipment.offsetUsft!!) ?: return null
+        return subtractDepth(face, SurveyUnits.feet(depth.meters))
+    }
+
+    private fun faceElevation(referenceElevation: Double, positiveDownOffset: Double): Double? {
+        if (!referenceElevation.isFinite() || !positiveDownOffset.isFinite() || positiveDownOffset < 0) return null
+        return (referenceElevation - positiveDownOffset).takeIf(Double::isFinite)
+    }
+
+    private fun subtractDepth(faceElevation: Double, acousticDepth: Double): Double? {
+        if (!acousticDepth.isFinite() || acousticDepth <= 0) return null
+        return (faceElevation - acousticDepth).takeIf(Double::isFinite)
     }
 }
 
