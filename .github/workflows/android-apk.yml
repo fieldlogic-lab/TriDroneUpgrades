@@ -1,16 +1,20 @@
-name: Build TriDrone Android APK
+name: Build HydroField Android APK
 on:
   workflow_dispatch:
+  push:
+    branches: [codex/hydrofield-2101]
 
 jobs:
   build:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref == 'refs/heads/codex/hydrofield-2101')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Install JDK
         uses: actions/setup-java@v4
         with:
@@ -32,18 +36,20 @@ jobs:
             echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/tridrone.jks"
             echo "TRIDRONE_KEYSTORE_PATH=$RUNNER_TEMP/tridrone.jks" >> "$GITHUB_ENV"
           else
-            echo "::warning::Persistent signing is not configured; in-place updates may fail."
+            echo "::error::HydroField requires the established persistent signing key."
+            exit 1
           fi
-      - name: Run JVM regression tests
-        run: gradle --no-daemon :app:testDebugUnitTest
+      - name: Run JVM regression tests and lint
+        run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug
       - name: Upload unit-test diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: TriDrone-unit-test-reports
+          name: HydroField-unit-test-reports
           path: |
             app/build/reports/tests/testDebugUnitTest/
             app/build/test-results/testDebugUnitTest/
+            app/build/reports/lint-results-debug.*
           if-no-files-found: warn
       - name: Compile debug APK
         env:
@@ -51,15 +57,54 @@ jobs:
           TRIDRONE_KEY_ALIAS: ${{ secrets.TRIDRONE_KEY_ALIAS }}
           TRIDRONE_KEY_PASSWORD: ${{ secrets.TRIDRONE_KEY_PASSWORD }}
         run: gradle --no-daemon :app:assembleDebug
-      - name: Publish installable debug APK
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/build/identified-apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
+            app/build/outputs/apk/debug/app-debug.apk | tee app/build/identified-apk/SIGNATURE.txt
+          # Public signing fingerprint from the existing TriDrone update APK.
+          grep -Fx 'Signer #1 certificate SHA-256 digest: d2d543fe2518073124fd01d5bdcb971cc1ab034149dcce8aa99e71a98b983d52' \
+            app/build/identified-apk/SIGNATURE.txt
+      - name: Read APK version code
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging \
+            app/build/outputs/apk/debug/app-debug.apk > app/build/identified-apk/BADGING.txt
+          grep -E "^package: name='com\.massisolutions\.tridrone' versionCode='2101' " app/build/identified-apk/BADGING.txt
+          grep -Fx "application-label:'HydroField'" app/build/identified-apk/BADGING.txt
+          version_code=2101
+          echo "TRIDRONE_APK_VERSION_CODE=$version_code" >> "$GITHUB_ENV"
+
+      - name: Identify installable test build
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/build/identified-apk
+          apk_name="HydroField-build-${TRIDRONE_APK_VERSION_CODE}-${GITHUB_SHA:0:7}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "app/build/identified-apk/$apk_name"
+          (
+            cd app/build/identified-apk
+            sha256sum "$apk_name" > SHA256SUMS
+          )
+          {
+            echo "HydroField build $TRIDRONE_APK_VERSION_CODE"
+            echo "Version code: $TRIDRONE_APK_VERSION_CODE"
+            echo "Commit: $GITHUB_SHA"
+            echo "Source: $GITHUB_REF"
+            echo "Install the APK in this ZIP directly. The published in-app update feed does not deliver draft PR artifacts."
+          } > app/build/identified-apk/BUILD.txt
+      - name: Upload installable APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TriDrone-Logger-v0.1-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: HydroField-build-${{ env.TRIDRONE_APK_VERSION_CODE }}
+          path: app/build/identified-apk/
           if-no-files-found: error
 
       - name: Publish signed update to this repository
-        if: ${{ env.TRIDRONE_KEYSTORE_PATH != '' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && env.TRIDRONE_KEYSTORE_PATH != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -67,7 +112,7 @@ jobs:
           set -euo pipefail
           APK="app/build/outputs/apk/debug/app-debug.apk"
           SHA=$(sha256sum "$APK" | cut -d' ' -f1)
-          VERSION=$((1000 + GITHUB_RUN_NUMBER))
+          VERSION=$TRIDRONE_APK_VERSION_CODE
           cp "$APK" "$RUNNER_TEMP/tridrone.apk"
           jq -nc --argjson versionCode "$VERSION" --arg apkUrl "https://github.com/$GITHUB_REPOSITORY/releases/download/dev-latest/tridrone.apk" --arg sha256 "$SHA" '{versionCode:$versionCode,apkUrl:$apkUrl,sha256:$sha256}' > "$RUNNER_TEMP/latest.json"
           if ! gh release view dev-latest -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -84,6 +129,3 @@ jobs:
             sleep 5
           done
           echo "Update feed: https://github.com/$GITHUB_REPOSITORY/releases/download/dev-latest/latest.json"
-      - name: Report missing signing configuration
-        if: ${{ env.TRIDRONE_KEYSTORE_PATH == '' }}
-        run: echo "::warning::Set TRIDRONE_KEYSTORE_BASE64 and signing secrets to enable release publishing for approved manual runs."
